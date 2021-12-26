@@ -1,6 +1,6 @@
-title: game title
-description: game description
-author: you
+title: TI-994A Emulator
+description: TI-99/4A Emulator
+author: Erik Piehl
 splash:
   file: assets/no-image.png
 icon:
