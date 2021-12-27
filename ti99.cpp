@@ -1,6 +1,171 @@
 #include "ti99.hpp"
 
+extern "C" unsigned char vdptest_data[];
+
 using namespace blit;
+
+// Our 256*192 framebuffer of 4 bits per pixels TMS9918 pixels.
+#define TI_WIDTH 256
+#define TI_HEIGHT 192
+uint8_t ti_rendered[TI_WIDTH/2*TI_HEIGHT];
+uint8_t full_screen_color = 0;
+bool fill_full_screen = true;
+bool debug_show_pixel = false;
+
+// #define DEBUG_PRINT
+
+// TMS9918 colors from my tms9918.v verilog code.
+// Map the 16-colors into 8-bit RGB.
+uint8_t palette_lookup[16] = {
+    // R[7:5], G[4:2], B[1:0]
+    0, // transparent
+    0, // black
+    0b00011100,
+    0b00111101,
+    0b01001011,
+    0b10010011,
+    0b11101001,
+    0b00011111,     // cyan
+    0b11101001,     // medium red
+    0b11110010,     // light red
+    0b11111000,     // dark yellow
+    0b11111010,     // light yellow
+    0b00011000,     // dark green
+    0b11110111,     // magenta
+    0b10010010,     // gray
+    0b11111111      // white
+};
+
+struct tms9918_t {
+    uint8_t regs[8];
+    uint8_t framebuf[16*1024];
+    unsigned name_table_addr;
+    tms9918_t() {
+        memset(regs,0,sizeof(regs));
+    }
+    void init() {
+        /*
+        regs[0] = 0x0;
+        regs[1] = 0xE0;
+        regs[2] = 0xF0;
+        regs[3] = 0x0E;
+        regs[4] = 0xF9;
+        regs[5] = 0x86;
+        regs[6] = 0xF8;
+        regs[7] = 0xF7;
+        */
+        memcpy(framebuf, vdptest_data, 16*1024);
+        memcpy(regs, vdptest_data+16*1024, 8 );
+        name_table_addr = regs[2] << 10;
+    }     
+    void scanline(int y) {
+        // Render one scanline from framebuf to ti_rendered.
+        name_table_addr = (regs[2] & 0xF) << 10;
+        unsigned color_table_addr; 
+        const int cell_width = regs[1] & 0x10 ? 6 : 8;
+        const int cells = regs[1] & 0x10 ? 40 : 32;
+        name_table_addr += (y >> 3) * cells;
+        unsigned pattern_addr;
+
+        for(int x=0; x<cells; x++) {
+            uint8_t name = framebuf[name_table_addr];
+            if(regs[1] & 8)
+                pattern_addr = ((regs[4] & 7) << 11) | (name << 3) | ((y  >> 2) & 7); // Multicolor mode
+            else if((regs[0] & 2) == 0) {
+                pattern_addr = ((regs[4] & 7) << 11) | (name << 3) | (y & 7); // GM1 
+                color_table_addr = (regs[3] << 6) | (name >> 3);
+            } else {
+                // GM2
+                pattern_addr = (((name_table_addr >> 8) & (regs[4] & 3)) << 11) | (name << 3) | (y & 7);
+                color_table_addr = ((regs[3] & 0x80) << 6) // MSB
+                    + (((regs[3] & 0x7F) << 6) & (((name_table_addr & 0x300) | (name & 0xF8)) << 3))
+                    + ((name & 7) << 3) | (y & 7); // 6 LSBs
+            }
+            uint8_t pattern = framebuf[pattern_addr];
+            uint8_t color = framebuf[color_table_addr];
+
+            unsigned color0, color1;
+            if(regs[1] & 8) {
+                // Multicolor mode
+                color1 = pattern >> 4;
+                color0 = pattern & 0xF;
+            } else {
+                color1 = regs[1] & 0x10 ? regs[7] >> 4  : color >> 4;
+                color0 = (color & 0xF) == 0 || (regs[1] & 0x10) ? regs[7] & 0xF : color & 0xF;
+            }
+
+#ifdef DEBUG_PRINT
+            if(x == 0 && (y & 7) == 0) {
+                printf("y=%d name=%d name_table_addr=0x%X pattern_addr=0x%X color_table_addr=0x%X color0=%d color1=%d color=0x%02X\n", 
+                y>>3, name, name_table_addr, pattern_addr, color_table_addr, color0, color1, color);
+            }
+#endif
+
+            // Pump pixels.
+            uint8_t *p = ti_rendered + (y << 7) + (x*cell_width >> 1);            
+#ifdef DEBUG_PRINT            
+            if((unsigned long)(p - ti_rendered) > sizeof(ti_rendered)) {
+                printf("overflow %ld y=%d\n", p-ti_rendered, y);
+            }
+#endif            
+            for(int n=0; n<cell_width; n += 2) {
+                uint8_t px = (pattern & 0x80 ? color1 : color0) << 4;
+                px |= pattern & 0x40 ? color1 : color0;
+                *p++ = px;
+                pattern <<= 2;
+            }
+            name_table_addr++;
+        }
+    }
+    void render(int yoffset) {
+        // Now render from ti_rendered to our framebuffer.
+        // My selfmade renderer.
+        if(screen.format == PixelFormat::RGB565) {
+            for(int y=0; y<192; y++) {
+                uint8_t *p = ti_rendered + (y << 7);
+                uint16_t *d = (uint16_t *)(screen.data + (yoffset+y)*screen.row_stride);
+                for(int x=0; x<128; x++) {
+                    // Two pixels per loop here.
+                    uint16_t k = palette_lookup[*p >> 4];
+                    d[0] = ((k & 0xE0) << 8) | ((k & 0x1C) << 2) | ((k & 3) << 3);
+                    k = palette_lookup[*p & 0xF];
+                    d[1] = ((k & 0xE0) << 8) | ((k & 0x1C) << 2) | ((k & 3) << 3);
+                    d += 2;
+                    p++;
+                }
+            }
+        } else if(screen.format == PixelFormat::RGB) {
+            // 24 bit RGB
+            for(int y=0; y<192; y++) {
+                uint8_t *p = ti_rendered + (y << 7);
+                uint8_t *d = screen.data + (yoffset+y)*screen.row_stride;
+                for(int x=0; x<128; x++) {
+                    // Two pixels per loop here.
+                    uint32_t k = palette_lookup[*p >> 4];
+                    d[0] = (k & 0xE0);  // R
+                    d[1] = ((k & 0x1C) << 3); // G
+                    d[2] = ((k & 3) << 6);    // B
+                    k = palette_lookup[*p & 0xF];
+                    d[3] = (k & 0xE0);  
+                    d[4] = ((k & 0x1C) << 3);
+                    d[5] = ((k & 3) << 6);
+                    d += 6;
+                    p++;
+                }
+            }
+
+        }    
+    }
+};
+
+tms9918_t tms9918;
+
+void show_pixel_RGB(uint8_t *p) {
+#ifdef DEBUG_PRINT      
+    printf("RGB=(%d,%d,%d)\n", p[0], p[1], p[2]);
+#endif
+}
+
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -10,6 +175,7 @@ using namespace blit;
 //
 void init() {
     set_screen_mode(ScreenMode::hires);
+    tms9918.init();
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -30,7 +196,38 @@ void render(uint32_t time) {
     screen.pen = Pen(255, 255, 255);
     screen.rectangle(Rect(0, 0, 320, 14));
     screen.pen = Pen(0, 0, 0);
-    screen.text("Hello 32blit!", minimal_font, Point(5, 4));
+    screen.text("TI-99/4A", minimal_font, Point(5, 4));
+
+    if(fill_full_screen) {
+        // Fill the whole screen with one of TI's colors
+        screen.pen = Pen( palette_lookup[full_screen_color] & 0xE0,
+                        (palette_lookup[full_screen_color] & 0x1C) << 3,
+                        (palette_lookup[full_screen_color] & 0x3) << 6);
+        screen.rectangle(Rect(0,15,TI_WIDTH, TI_HEIGHT+15));
+        screen.pen = screen.pen.r ? Pen(0,0,0) : Pen(255,255,255);
+        screen.text("color " + std::to_string(full_screen_color), minimal_font, Point(5, 20));
+        const char *fo = "?";
+        switch(screen.format) {
+            case PixelFormat::RGB:   fo = "RGB";     break;
+            case PixelFormat::RGBA:  fo = "RGBA";     break;
+            case PixelFormat::P:     fo = "P"; break;
+            case PixelFormat::M:     fo = "M"; break;
+            case PixelFormat::RGB565: fo = "RGB565"; break;
+            default:    fo = "unknown";
+        }
+        screen.text("pixel format " + std::string(fo) + " " + std::to_string(screen.pixel_stride) +
+            " row: "+ std::to_string(screen.row_stride),
+            minimal_font, Point(5,30));    
+    } else {
+        tms9918.render(15);
+        if(debug_show_pixel) {
+            debug_show_pixel = false;
+            show_pixel_RGB(screen.data + screen.row_stride*40);
+            show_pixel_RGB(screen.data + screen.row_stride*40+3);
+        }
+
+    }
+
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -41,4 +238,30 @@ void render(uint32_t time) {
 // amount if milliseconds elapsed since the start of your game
 //
 void update(uint32_t time) {
+
+    if(buttons.pressed & Button::A) {
+        // Advance to next color.
+        if(++full_screen_color >= 16)
+            full_screen_color = 0;
+        fill_full_screen = true;
+    }
+    if(buttons.pressed & Button::B) {
+        fill_full_screen = false;
+#ifdef DEBUG_PRINT          
+        printf("full_screen_color %d\n", (int)full_screen_color);
+        show_pixel_RGB(screen.data + screen.row_stride*40);
+        show_pixel_RGB(screen.data + screen.row_stride*40+3);
+#endif
+        for(int y=0; y<192; y++)
+            tms9918.scanline(y);
+/*            
+        // Overwrite with the color as above.
+        int z = (full_screen_color << 4) 
+                | full_screen_color;
+        printf("z=0x%X, c=%d\n", z, full_screen_color);
+        for(int i=0; i<192*128; i++)
+            ti_rendered[i] = z;
+        debug_show_pixel = true;
+*/        
+    }
 }
