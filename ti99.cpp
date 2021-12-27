@@ -1,4 +1,5 @@
 #include "ti99.hpp"
+#include <cstring>  // memcpy
 
 extern "C" unsigned char vdptest_data[];
 
@@ -79,7 +80,7 @@ struct tms9918_t {
                 pattern_addr = (((name_table_addr >> 8) & (regs[4] & 3)) << 11) | (name << 3) | (y & 7);
                 color_table_addr = ((regs[3] & 0x80) << 6) // MSB
                     + (((regs[3] & 0x7F) << 6) & (((name_table_addr & 0x300) | (name & 0xF8)) << 3))
-                    + ((name & 7) << 3) | (y & 7); // 6 LSBs
+                    + (((name & 7) << 3) | (y & 7)); // 6 LSBs
             }
             uint8_t pattern = framebuf[pattern_addr];
             uint8_t color = framebuf[color_table_addr];
@@ -119,17 +120,34 @@ struct tms9918_t {
     }
     void render(int yoffset) {
         // Now render from ti_rendered to our framebuffer.
-        // My selfmade renderer.
+        // My selfmade renderer. Center the image on the screen.
+        int w = screen.bounds.w;
+        int x_src_offset = 0;
+        int x_dest_offset = 0;
+        if(w < 256) {
+            x_src_offset = (256-w)/2;
+            x_src_offset >>= 1; // Divide further by 2 as each byte is 2 pixels.
+        } else if(w > 256) {
+            x_dest_offset = (w-256)/2;
+        }
         if(screen.format == PixelFormat::RGB565) {
             for(int y=0; y<192; y++) {
-                uint8_t *p = ti_rendered + (y << 7);
-                uint16_t *d = (uint16_t *)(screen.data + (yoffset+y)*screen.row_stride);
-                for(int x=0; x<128; x++) {
+                uint8_t *p = ti_rendered + (y << 7) + x_src_offset;
+                uint16_t *d = (uint16_t *)(screen.data + (yoffset+y)*screen.row_stride+x_dest_offset*2);
+                for(int x=0; x<128-x_src_offset*2; x++) {
                     // Two pixels per loop here.
                     uint16_t k = palette_lookup[*p >> 4];
-                    d[0] = ((k & 0xE0) << 8) | ((k & 0x1C) << 2) | ((k & 3) << 3);
+                    // SRC:   RRR    GGG    BB
+                    // DST: BBBBB GGGGGG RRRRR (32blit on picosystem)
+                    uint16_t r = (k & 0xE0) >> 2;   // 5 bits of red
+                    uint16_t g = (k & 0x1C) << 1;   // 6 bits of green
+                    uint16_t b = (k & 3) << 3;      // 5 bits of blue
+                    d[0] = r | (g << 5) | (b << 11);
                     k = palette_lookup[*p & 0xF];
-                    d[1] = ((k & 0xE0) << 8) | ((k & 0x1C) << 2) | ((k & 3) << 3);
+                    r = (k & 0xE0) >> 2;   // 5 bits of red
+                    g = (k & 0x1C) << 1;   // 6 bits of green
+                    b = (k & 3) << 3;      // 5 bits of blue
+                    d[1] = r | (g << 5) | (b << 11);
                     d += 2;
                     p++;
                 }
@@ -137,8 +155,8 @@ struct tms9918_t {
         } else if(screen.format == PixelFormat::RGB) {
             // 24 bit RGB
             for(int y=0; y<192; y++) {
-                uint8_t *p = ti_rendered + (y << 7);
-                uint8_t *d = screen.data + (yoffset+y)*screen.row_stride;
+                uint8_t *p = ti_rendered + (y << 7) + x_src_offset;
+                uint8_t *d = screen.data + (yoffset+y)*screen.row_stride+3*x_dest_offset;
                 for(int x=0; x<128; x++) {
                     // Two pixels per loop here.
                     uint32_t k = palette_lookup[*p >> 4];
