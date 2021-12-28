@@ -1,5 +1,6 @@
 #include "ti99.hpp"
 #include <cstring>  // memcpy
+#include "tms9900.hpp"
 
 extern "C" unsigned char vdptest_data[];
 
@@ -178,6 +179,37 @@ struct tms9918_t {
 
 tms9918_t tms9918;
 
+extern "C" {
+    extern const unsigned char rom994a_data[];
+    extern const unsigned char grom994a_data[];
+}
+
+uint8_t scratchpad[256];
+
+class cpu_t : public tms9900_t {
+protected:
+     virtual uint16_t read(uint16_t addr) {
+         if(addr < 0x2000) {
+             return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
+         } else if(addr >= 0x8300 && addr <0x8400) {
+             return (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
+         } else {
+             printf("reading outside of memory: 0x%4X\n", addr);
+         }
+         return 0xdead;
+    }
+    virtual void write(uint16_t addr, uint16_t data) {
+         if(addr >= 0x8300 && addr < 0x8400) {
+             scratchpad[addr - 0x8300] = data >> 8;
+             scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
+         } else {
+             printf("writing outside of memory: 0x%4X\n", addr);
+         }
+    }
+};
+
+cpu_t cpu;
+
 void show_pixel_RGB(uint8_t *p) {
 #ifdef DEBUG_PRINT      
     printf("RGB=(%d,%d,%d)\n", p[0], p[1], p[2]);
@@ -194,6 +226,9 @@ void show_pixel_RGB(uint8_t *p) {
 void init() {
     set_screen_mode(ScreenMode::hires);
     tms9918.init();
+    printf("About to enter cpu.reset()\n");
+    cpu.reset();
+    printf("Completed cpu.reset()\n");
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -214,7 +249,8 @@ void render(uint32_t time) {
     screen.pen = Pen(255, 255, 255);
     screen.rectangle(Rect(0, 0, 320, 14));
     screen.pen = Pen(0, 0, 0);
-    screen.text("TI-99/4A", minimal_font, Point(5, 4));
+    screen.text("TI-99/4A " + std::to_string(cpu.pc) + " " + std::to_string(cpu.inst_count) + " " + (cpu.stuck ? "STUCK" : ""),
+         minimal_font, Point(5, 4));
 
     if(fill_full_screen) {
         // Fill the whole screen with one of TI's colors
@@ -281,5 +317,15 @@ void update(uint32_t time) {
             ti_rendered[i] = z;
         debug_show_pixel = true;
 */        
+    }
+    if(buttons.pressed & Button::X) {
+        cpu.reset();
+        printf("CPU reset\n");
+        while(!cpu.stuck) {
+            char s[80];
+            int t = cpu.dasm_instruction(s, cpu.pc);
+            printf("t=%d %04X %s\n", t, cpu.pc, s);
+            cpu.step();
+        }
     }
 }
