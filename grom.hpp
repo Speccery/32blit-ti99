@@ -44,6 +44,9 @@ public:
       // printf("GROM sel=%d offset=0x%04X\n", sel, offset);
     }
   }
+  uint16_t get_read_addr() const {
+    return read_addr;
+  }
 protected:
   void update_read_addr() {
     uint16_t next_offset = 0x1FFF & (offset + 1);

@@ -8,12 +8,6 @@
 
 #define INTLEN 32
 
-const uint16_t ST15 = 1 << 15;
-const uint16_t ST14 = 1 << 14;
-const uint16_t ST13 = 1 << 13;
-const uint16_t ST12 = 1 << 12;
-const uint16_t ST11 = 1 << 11;
-const uint16_t ST10 = 1 << 10;
 
 const instrucion_t instructions[] = {
     // Dual operand instructions.
@@ -123,6 +117,7 @@ void tms9900_t::reset() {
   func[15] = &tms9900_t::do_execF;
 
   st = 0;
+  stuck = false;
   do_blwp(0);
 }
 
@@ -322,19 +317,134 @@ void tms9900_t::do_exec0() {
     write_reg(ir & 0xF, dst);
     // Set ST[15]..ST[12]
     flags_012_others(dst);  // ST15,ST14,ST13
-    // ST12 is carry
-    st &= ~ST12;
-    st |= (dst & 0x10000) ? ST12 : 0;
+    set_carry_add(dst);
     return;
   }
 
-  switch(ir & 0xFFE0) {
-    case 0x0200: {  // LI instruction
-      uint16_t imm = next();
-      write_reg(ir & 0xF, imm);
-      flags_012_others(imm);
-      return;
+  //  { 0x0440, 0xFFC0, single_op, "B" },
+  //  { 0x0680, 0xFFC0, single_op, "BL" },
+  //  { 0x040C, 0xFFC0, single_op, "BLWP" },
+  //  { 0x04C0, 0xFFC0, single_op, "CLR" },
+  //  { 0x0700, 0xFFC0, single_op, "SETO" },
+  //  { 0x0540, 0xFFC0, single_op, "INV" },
+  //  { 0x0500, 0xFFC0, single_op, "NEG" },
+  //  { 0x0740, 0xFFC0, single_op, "ABS" },
+  //  { 0x06C0, 0xFFC0, single_op, "SWPB" },
+  //  { 0x0580, 0xFFC0, single_op, "INC" },
+  //  { 0x05C0, 0xFFC0, single_op, "INCT" },
+  //  { 0x0600, 0xFFC0, single_op, "DEC" },
+  //  { 0x0640, 0xFFC0, single_op, "DECT" },
+  //  { 0x0480, 0xFFC0, single_op, "X" },
+  if((ir & 0x0C00) == 0x0400) {
+    uint16_t sa = source_address(ir & 0x3F, true);
+
+    switch((ir >> 6) & 0xF) {
+      case  0:                                      // BLWP
+        break;
+      case  1: pc = sa; return;                     // B
+      case  2: {                                    // X
+        break;
+      }
+      case  3: write(sa, 0); return;                // CLR
+      case  4: {                                    // NEG
+        const uint16_t r = read( sa );
+        unsigned result = -r;
+        write(sa, result);
+        flags_012_others(result);
+        set_carry_sub(result);
+        set_overflow_sub(result, 0, r);  // CHECKME
+        return;
+      }
+      case  5: {                                    // INV
+        uint16_t r = read( sa );
+        r = ~r;
+        flags_012_others( r );
+        write(sa, r);
+        return;
+      }
+      case  6:                                      // INC st0-st4  
+      case  7: {                                    // INCT st0-st4
+        const uint16_t r = read( sa );
+        const uint16_t amount = (ir & 0x40) ? 2 : 1;
+        unsigned result = r + amount;
+        write(sa, result);
+        flags_012_others(result);
+        set_carry_add(result);
+        set_overflow_add(result, r, amount);  // CHECKME
+        return;
+      }
+      case  8:                                      // DEC st0-4
+      case  9: {                                    // DECT st0-4                            
+        const uint16_t r = read( sa );
+        const uint16_t amount = (ir & 0x40) ? 2 : 1;
+        unsigned result = r - amount;
+        write(sa, result);
+        flags_012_others(result);
+        set_carry_sub(result);
+        set_overflow_sub(result, r, amount);  // CHECKME
+        return;
+      }
+      case 10: write_reg(11, pc); pc = sa; return;  // BL
+      case 11: {                                    // SWPB
+        const uint16_t src = read( sa );
+        write(sa, (src << 8) | (src >> 8));
+        return;
+      }
+      case 12: write(sa, 0xFFFF); return;           // SETO
     }
+  }
+
+  if((ir & 0x0F00) == 0x0200) {
+    switch((ir >> 5) & 7) {
+      case 0: {  // LI instruction
+        uint16_t imm = next();
+        write_reg(ir & 0xF, imm);
+        flags_012_others(imm);
+        return;
+      }
+      case 1: { // AI instruction
+        uint16_t imm = next();
+        uint16_t sa = wp + ((ir & 0xF) << 1);
+        const uint16_t src = read(sa);
+        printf("AI 0x%04X 0x%04X\n", src, imm);
+        unsigned d = src + imm;
+        write_reg(ir & 0xF, d);
+        flags_012_others(d);
+        set_carry_add(d);
+        set_overflow_add(d, src, imm);
+        return;
+      }
+      case 2: { // ANDI
+        uint16_t imm = next();
+        uint16_t sa = wp + ((ir & 0xF) << 1);
+        uint16_t d = read(sa);
+        printf("ANDI 0x%04X 0x%04X\n", d, imm);
+        d = d & imm;
+        write_reg(ir & 0xF, d);
+        flags_012_others(d);
+        return;
+      }
+      case 3: { // ORI
+        uint16_t imm = next();
+        uint16_t sa = wp + ((ir & 0xF) << 1);
+        uint16_t d = read(sa);
+        d = d | imm;
+        write_reg(ir & 0xF, d);
+        flags_012_others(d);
+        return;
+      }
+      case 4: { // CI
+        uint16_t imm = next();
+        uint16_t sa = wp + ((ir & 0xF) << 1);
+        const uint16_t src = read(sa);
+        set_flags_compare(imm, src);
+        printf("CI ST: 0x%04X, imm 0x%04X, src=0x%04X\n", st, imm, src);
+        return;
+      }
+    }
+  }
+
+  switch(ir & 0xFFE0) {
     case 0x0300: {  // LIMI
       uint16_t imm = next();
       st = (st & 0xFFF0) | (imm & 0xF);
@@ -375,8 +485,24 @@ void tms9900_t::do_exec1() {
     case 10: if(!(st & (ST15 | ST13)))                pc += offset; return; // JL
     case 11: if((st & ST15) && !(st & ST13))          pc += offset; return; // JH
     case 12: if(st & ST10)                            pc += offset; return; // JOP (odd parity)
-      case 0xD: case 0xE: case 0xF:
-      // not jumps, something different.
+    case 13: {                                                              // SBO
+      uint16_t offset = ir & 0x80 ? 0xFF00 | (ir & 0xFF) : (ir & 0xFF); // sign extend
+      write_cru_bit( read_reg(12) + (offset << 1), 1 );
+      return;
+    }
+    case 14: {                                                              // SBZ
+      uint16_t offset = ir & 0x80 ? 0xFF00 | (ir & 0xFF) : (ir & 0xFF); // sign extend
+      write_cru_bit( read_reg(12) + (offset << 1), 0 );
+      return;
+    }
+    case 15: {                                                              // TB
+      uint16_t offset = ir & 0x80 ? 0xFF00 | (ir & 0xFF) : (ir & 0xFF); // sign extend
+      unsigned b = read_cru_bit( read_reg(12) + (offset << 1) );
+      st &= ~ST13;
+      st |= b ? ST13 : 0;
+      return;
+    }
+
     default:
       break;
   }
@@ -384,9 +510,78 @@ void tms9900_t::do_exec1() {
   stuck = true;
 }
 void tms9900_t::do_exec2() {
+  uint16_t s, d, r;
+  unsigned reg;
+  switch((ir >> 10) & 3) {
+    case 0:     // COC st2 ST13
+      s = read_operand(ir & 0x3F, true);
+      d = read_reg((ir >> 6) & 0xF);
+      r = (s ^ d) & s;
+      st &= ~ST13;
+      st |= !r ? ST13 : 0;
+      return;
+    case 1:     // CZC st2 ST13
+      s = read_operand(ir & 0x3F, true);
+      d = read_reg((ir >> 6) & 0xF);
+      r = (s ^ ~d) & s;
+      st &= ~ST13;
+      st |= !r ? ST13 : 0;
+      return;
+    case 2:     // XOR st0-2 ST15,ST14,ST13
+      s = read_operand(ir & 0x3F, true);
+      reg = (ir >> 6) & 0xF;
+      d = read_reg(reg);
+      r = s ^ d;
+      write_reg(reg, r);
+      flags_012_others(r);
+      return;
+  }
   stuck = true;
 }
 void tms9900_t::do_exec3() {
+  if((ir & 0xFC00) == 0x3000) { // LDCR
+    unsigned count = (ir >> 6) & 0xF;
+    if(count == 0)  
+      count = 16;
+    bool byteop = count <= 8;
+    uint16_t addr = read_reg(12);
+    uint16_t src = read_operand(ir & 0x3F, byteop);
+    flags_012_others(src);
+    if(byteop) {
+      do_parity(src);
+      src >>= 8;
+    }
+    while(count > 0) {
+      write_cru_bit(addr, src & 1);
+      addr += 2;
+      src >>= 1;
+      count--;
+    }
+    return;
+  } else if((ir & 0xFC00) == 0x3400) { // STCR read from CRU to register
+    unsigned count = (ir >> 6) & 0xF;
+    if(count == 0)  
+      count = 16;
+    bool byteop = count <= 8;
+    uint16_t addr = read_reg(12);
+    uint16_t result=0;
+    for(unsigned u=0; u<count; u++) {
+      uint16_t bit = read_cru_bit(addr) & 1;
+      addr += 2;
+      result |= bit << u;
+    }
+    if(byteop) {
+      result <<= 8;
+      do_parity(result);
+    }
+    flags_012_others(result);
+    uint16_t da = source_address(ir & 0x3F, !byteop);
+    if(byteop)
+      write_byte(da, result);
+    else
+      write(da, result);
+    return;
+  }
   stuck = true;
 }
 void tms9900_t::do_exec4() {      // SZC
@@ -408,25 +603,65 @@ void tms9900_t::do_exec5() {       // SZCB
   write_byte(dst_addr, dst);
 }
 
-void tms9900_t::do_exec6() {
-  stuck = true;
+void tms9900_t::do_exec6() {      // S substract
+  const uint16_t src = read_operand(ir, true);
+  const uint16_t dst_addr = source_address(ir >> 6, true);
+  const uint16_t dst = read(dst_addr);
+  const unsigned result = dst - src;
+  write(dst_addr, result);
+  flags_012_others(result);
+  set_overflow_sub(result, dst, src);
+  set_carry_sub(result);
 }
-void tms9900_t::do_exec7() {
-  stuck = true;
+void tms9900_t::do_exec7() {    // SB
+  const uint16_t src = read_operand(ir, false);
+  const uint16_t dst_addr = source_address(ir >> 6, false);
+  const uint16_t dst = read(dst_addr);
+  const unsigned result = dst - src;
+  write_byte(dst_addr, result);
+  flags_012_others(result);
+  do_parity(result);
+  set_overflow_sub(result, dst, src);
+  set_carry_sub(result);
 }
 
-void tms9900_t::do_exec8() {
-  stuck = true;
+void tms9900_t::do_exec8() {    // C
+  const uint16_t src = read_operand(ir, true);
+  const uint16_t dst_addr = source_address(ir >> 6, true);
+  const uint16_t dst = read(dst_addr);
+  const unsigned result = dst - src;
+  flags_012_others(result);
 }
 
-void tms9900_t::do_exec9() {
-  stuck = true;
+void tms9900_t::do_exec9() {    // CB
+  const uint16_t src = read_operand(ir, false);
+  const uint16_t dst_addr = source_address(ir >> 6, false);
+  const uint16_t dst = read(dst_addr);
+  const unsigned result = dst-src;
+  flags_012_others(result);
+  do_parity(result);
 }
-void tms9900_t::do_execA() {
-  stuck = true;
+
+void tms9900_t::do_execA() {    // A add
+  const uint16_t src = read_operand(ir, true);
+  const uint16_t dst_addr = source_address(ir >> 6, true);
+  const uint16_t dst = read(dst_addr);
+  const unsigned result = dst + src;
+  write(dst_addr, result);
+  flags_012_others(result);
+  set_overflow_add(result, dst, src);
+  set_carry_add(result);
 }
-void tms9900_t::do_execB() {
-  stuck = true;
+void tms9900_t::do_execB() {    // AB add bytes
+  const uint16_t src = read_operand(ir, false);
+  const uint16_t dst_addr = source_address(ir >> 6, false);
+  const uint16_t dst = read(dst_addr);
+  const unsigned result = dst + src;
+  write_byte(dst_addr, result);
+  flags_012_others(result);
+  do_parity(result);
+  set_overflow_add(result, dst, src);
+  set_carry_add(result);
 }
 void tms9900_t::do_execC() {    // MOV
   // Dual operand cycle.
@@ -447,18 +682,30 @@ void tms9900_t::do_execD() {    // MOVB
   write_byte(dst_addr, src);
 }
 
-void tms9900_t::do_execE() {
-  stuck = true;
+void tms9900_t::do_execE() {      // SOC
+  uint16_t src = read_operand(ir, true);
+  uint16_t dst_addr = source_address(ir >> 6, true);
+  uint16_t dst = read(dst_addr);
+  dst |= src;
+  flags_012_others(dst);
+  write(dst_addr, dst);
 }
 
-void tms9900_t::do_execF() {
-  stuck = true;
+void tms9900_t::do_execF() {      // SOCB
+  uint16_t src = read_operand(ir, false);
+  uint16_t dst_addr = source_address(ir >> 6, false);
+  uint16_t dst = read(dst_addr);
+  dst |= src;
+  flags_012_others(dst);
+  do_parity(dst);
+  write_byte(dst_addr, dst);
 }
 
 void tms9900_t::write_byte(uint16_t dst_addr, uint16_t dst) {
   // Write the destination byte. Requires read modify write cycle.
   // High byte of dst is our byte to write.
-  uint16_t d = read(dst_addr & ~1);
+  uint16_t d = read(dst_addr);
+  printf("write_byte: dst 0x%04X, d 0x%04X from 0x%04X\n", dst, d, dst_addr);
   if(dst_addr & 1) {
     // write low byte
     d = (d & 0xFF00) | (dst >> 8);
@@ -466,8 +713,8 @@ void tms9900_t::write_byte(uint16_t dst_addr, uint16_t dst) {
     // write high byte
     d = (d & 0x00FF) | (dst & 0xFF00);
   }
-  write(dst_addr & ~1, d);
-
+  printf("write_byte: writing d 0x%04X to 0x%04X\n", d, dst_addr);
+  write(dst_addr, d);
 }
 
 void tms9900_t::do_parity(uint16_t src) {

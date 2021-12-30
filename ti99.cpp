@@ -204,6 +204,11 @@ protected:
              return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
          } else if(addr >= 0x8300 && addr <0x8400) {
              return (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
+         } else if(addr >= 0x8400 && addr<0x8800) {
+             // sound chip access
+         } else if(addr >= 0x9000 && addr < 0x9800) {
+             // speech synthesizer
+             return 0xAC00;
          } else if(addr >= 0x9800 && addr < 0xA000) {
              // GROM reads. 9800..9BFF is the actual read area.
              // 9C00..9FFF is write port, but read due to read-modify-write architecture.
@@ -222,13 +227,24 @@ protected:
          if(addr >= 0x8300 && addr < 0x8400) {
              scratchpad[addr - 0x8300] = data >> 8;
              scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
+         } else if(addr >= 0x8400 && addr < 0x8800) {
+             // sound chip access
          } else if (addr >= 0x9c00 && addr < 0xA000) {
              grom.write(addr, data >> 8);
+         } else if(addr >= 0x9400 && addr < 0x9800) {
+             // Speech write, do nothing.
          } else {
              stuck = true;
              printf("writing outside of memory: 0x%4X\n", addr);
          }
-         printf("Writing to 0x%04X value 0x%04X\n", addr, data);
+         printf("Writing to 0x%04X value 0x%04X, GROM addr 0x%04X\n", addr, data, grom.get_read_addr());
+    }
+    virtual void write_cru_bit(uint16_t addr, uint8_t data) {
+        printf("CRU write 0x%04X data %d\n", addr, data);
+    }
+    virtual uint8_t read_cru_bit(uint16_t addr) {
+        printf("CRU read 0x%04X\n", addr);
+        return 1;
     }
 };
 
