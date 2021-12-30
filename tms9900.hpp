@@ -58,6 +58,8 @@ class tms9900_t {
       return d;
     }
     void flags_012_others(uint16_t t);
+    void do_parity(uint16_t src);
+    void write_byte(uint16_t dst_addr, uint16_t dst);
 
     virtual uint16_t read(uint16_t addr) = 0;
     virtual void write(uint16_t addr, uint16_t data) = 0;
@@ -69,6 +71,8 @@ class tms9900_t {
     inline uint16_t read_reg(unsigned r) {
       return read(wp+(r << 1));
     }
-  char *dasm_addr_mode(char *s, unsigned mode, int *len);
-  int dasm_one(char *buf, int state_in, int opcode);
+    char *dasm_addr_mode(char *s, unsigned mode, int *len);
+    int dasm_one(char *buf, int state_in, int opcode);
+    uint16_t read_operand(uint16_t op, bool word_operation);
+    uint16_t source_address(uint16_t op, bool word_operation);
 };

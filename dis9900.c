@@ -203,6 +203,7 @@ int dasm_one(char *buf, int state_in, int opcode) {
             break;
         case internal_immediates:
             sprintf(buf, "%-4s #", instructions[j].str); 
+            state_out = 1;  // immediate follows
             break;
         case internal_store:
             sprintf(buf, "%-4s R%d", instructions[j].str, opcode & 0xF); 

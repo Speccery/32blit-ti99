@@ -1,5 +1,6 @@
 // tms9900.cpp
 // Implementation of the TMS9900 CPU.
+// Erik Piehl (C) 2021
 
 #include <stdio.h>  // sprintf
 #include <string.h> // strcat
@@ -251,6 +252,7 @@ int tms9900_t::dasm_one(char *buf, int state_in, int opcode) {
             break;
         case internal_immediates:
             sprintf(buf, "%-4s #", instructions[j].str); 
+            state_out = 1;  // immediate follows
             break;
         case internal_store:
             sprintf(buf, "%-4s R%d", instructions[j].str, opcode & 0xF); 
@@ -282,12 +284,62 @@ int tms9900_t::dasm_instruction(char *dst, uint16_t addr) {
 }
 
 void tms9900_t::do_exec0() {
-  if((ir & 0xFFE0) == 0x0200) {
-    // LI instruction
-    uint16_t imm = next();
-    write_reg(ir & 0xF, imm);
-    flags_012_others(imm);
+    // { 0x0A00, 0xFF00, shifts, "SLA" }, 
+    // { 0x0800, 0xFF00, shifts, "SRA" }, 
+    // { 0x0B00, 0xFF00, shifts, "SRC" }, 
+    // { 0x0900, 0xFF00, shifts, "SRL" }, 
+  if((ir & 0x0C00) == 0x0800) {
+    unsigned shift_count = (ir >> 4) & 0xF;
+    if(shift_count == 0) {
+      shift_count = read_reg(0) & 0xF;
+      if(shift_count == 0)
+        shift_count = 16;
+    }
+    const uint16_t src = read_reg(ir & 0xF);
+    unsigned dst;
+    switch((ir >> 8) & 3) {
+      case 0: // SRA
+        if(src & 0x8000)
+          dst = 0xFFFF0000 | src;
+        else
+          dst = src;
+        dst >>= shift_count;
+        break;
+      case 1: // SRL
+        dst = src >> shift_count;
+        break;
+      case 2: // SLA
+        dst = src << shift_count;
+        // ST11 is set (overflow) for sign changing SLA
+        st &= ~ST11;
+        st |= (dst & 0x8000) != (src & 0x8000) ? ST11 : 0;
+        break;
+      case 3: // SRC
+        dst = (src << 16) | src;
+        dst >>= shift_count;
+        break;
+    }
+    write_reg(ir & 0xF, dst);
+    // Set ST[15]..ST[12]
+    flags_012_others(dst);  // ST15,ST14,ST13
+    // ST12 is carry
+    st &= ~ST12;
+    st |= (dst & 0x10000) ? ST12 : 0;
     return;
+  }
+
+  switch(ir & 0xFFE0) {
+    case 0x0200: {  // LI instruction
+      uint16_t imm = next();
+      write_reg(ir & 0xF, imm);
+      flags_012_others(imm);
+      return;
+    }
+    case 0x0300: {  // LIMI
+      uint16_t imm = next();
+      st = (st & 0xFFF0) | (imm & 0xF);
+      return;
+    }
   }
   
   stuck = true;
@@ -337,12 +389,25 @@ void tms9900_t::do_exec2() {
 void tms9900_t::do_exec3() {
   stuck = true;
 }
-void tms9900_t::do_exec4() {
-  stuck = true;
+void tms9900_t::do_exec4() {      // SZC
+  uint16_t src = read_operand(ir, true);
+  uint16_t dst_addr = source_address(ir >> 6, true);
+  uint16_t dst = read(dst_addr);
+  dst &= ~src;
+  flags_012_others(dst);
+  write(dst_addr, dst);
 }
-void tms9900_t::do_exec5() {
-  stuck = true;
+
+void tms9900_t::do_exec5() {       // SZCB
+  uint16_t src = read_operand(ir, false);
+  uint16_t dst_addr = source_address(ir >> 6, false);
+  uint16_t dst = read(dst_addr);
+  dst &= ~src;
+  flags_012_others(dst);
+  do_parity(dst);
+  write_byte(dst_addr, dst);
 }
+
 void tms9900_t::do_exec6() {
   stuck = true;
 }
@@ -363,18 +428,53 @@ void tms9900_t::do_execA() {
 void tms9900_t::do_execB() {
   stuck = true;
 }
-void tms9900_t::do_execC() {
-  stuck = true;
+void tms9900_t::do_execC() {    // MOV
+  // Dual operand cycle.
+  // Source operand, bits 5..0
+  uint16_t src = read_operand(ir, true);
+  uint16_t dst_addr = source_address(ir >> 6, true);
+  flags_012_others(src);
+  write(dst_addr, src);
 }
-void tms9900_t::do_execD() {
-  stuck = true;
+
+void tms9900_t::do_execD() {    // MOVB
+  // Dual operand cycle.
+  // Source operand, bits 5..0
+  uint16_t src = read_operand(ir, false);
+  uint16_t dst_addr = source_address(ir >> 6, false);
+  flags_012_others(src);
+  do_parity(src);
+  write_byte(dst_addr, src);
 }
+
 void tms9900_t::do_execE() {
   stuck = true;
 }
 
 void tms9900_t::do_execF() {
   stuck = true;
+}
+
+void tms9900_t::write_byte(uint16_t dst_addr, uint16_t dst) {
+  // Write the destination byte. Requires read modify write cycle.
+  // High byte of dst is our byte to write.
+  uint16_t d = read(dst_addr & ~1);
+  if(dst_addr & 1) {
+    // write low byte
+    d = (d & 0xFF00) | (dst >> 8);
+  } else {
+    // write high byte
+    d = (d & 0x00FF) | (dst & 0xFF00);
+  }
+  write(dst_addr & ~1, d);
+
+}
+
+void tms9900_t::do_parity(uint16_t src) {
+  // Byte operations set parity
+  st &= ~ST10;
+  uint16_t paritys = (src >> 7) ^ (src >> 6) ^ (src >> 5) ^(src >> 4) ^ (src >> 3) ^ (src >> 2) ^ (src >> 1) ^ src;
+  st |= 0x100 & paritys ? ST10 : 0;
 }
 
 void tms9900_t::flags_012_others(uint16_t t) {
@@ -386,3 +486,46 @@ void tms9900_t::flags_012_others(uint16_t t) {
   st |= !(t & 0x8000) && t ? ST14 : 0;
   st |= t == 0 ? ST13 : 0;
 }
+
+uint16_t tms9900_t::read_operand(uint16_t op, bool word_operation) {
+  uint16_t sa = source_address(op, word_operation);
+  // Do byte selection.
+  if(word_operation)
+    return read(sa);
+
+  // byte operations. Return in top 8 bits.
+  // remember that TMS9900 is big endian.
+  if(sa & 1) {
+    // low byte
+    return read(sa & ~1) << 8;
+  } else {
+    return read(sa & ~1) & 0xFF00; // high byte
+  }
+}
+
+uint16_t tms9900_t::source_address(uint16_t op, bool word_operation) {
+  op &= 0x3F;
+  switch(op & 0x30) {
+    case 0x00: return wp+((op & 0xF) << 1); // workspace register
+    case 0x10: return read_reg(op & 0xF);   // workspace register indirect
+    case 0x20: {
+      // symbolic or indexed mode.
+      uint16_t t = next();
+      if((op & 0xF) == 0) {
+        // symbolic addressing mode.
+        return t;
+      } else {
+        // Indexed addressing mode.
+        return t + read_reg(op & 0xF);
+      }
+    }
+    case 0x30: {
+      // workspace register indirect auto increment
+      uint16_t t = read_reg(op & 0xF);
+      write_reg(op & 0xF, t + (word_operation ? 2 : 1));
+      return t;
+    }
+  }  
+  return 0; // never executed
+}
+

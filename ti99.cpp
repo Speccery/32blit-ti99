@@ -1,6 +1,7 @@
 #include "ti99.hpp"
 #include <cstring>  // memcpy
 #include "tms9900.hpp"
+#include "grom.hpp"
 
 extern "C" unsigned char vdptest_data[];
 
@@ -184,27 +185,50 @@ extern "C" {
     extern const unsigned char grom994a_data[];
 }
 
+class tigrom_t : public grom_t {
+protected:
+    uint8_t read_mem(uint16_t addr) {
+        return grom994a_data[addr];
+    }
+};
+
+tigrom_t grom;
+
 uint8_t scratchpad[256];
 
 class cpu_t : public tms9900_t {
 protected:
      virtual uint16_t read(uint16_t addr) {
+         addr &= ~1; // make the address even
          if(addr < 0x2000) {
              return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
          } else if(addr >= 0x8300 && addr <0x8400) {
              return (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
+         } else if(addr >= 0x9800 && addr < 0xA000) {
+             // GROM reads. 9800..9BFF is the actual read area.
+             // 9C00..9FFF is write port, but read due to read-modify-write architecture.
+             if(addr >= 9800 && addr < 0x9C00)
+                return grom.read(addr) << 8;
+            else
+                return 0xAB00;  // dummy
          } else {
+             stuck = true;
              printf("reading outside of memory: 0x%4X\n", addr);
          }
          return 0xdead;
     }
     virtual void write(uint16_t addr, uint16_t data) {
+        addr &= ~1; // make the addres even
          if(addr >= 0x8300 && addr < 0x8400) {
              scratchpad[addr - 0x8300] = data >> 8;
              scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
+         } else if (addr >= 0x9c00 && addr < 0xA000) {
+             grom.write(addr, data >> 8);
          } else {
+             stuck = true;
              printf("writing outside of memory: 0x%4X\n", addr);
          }
+         printf("Writing to 0x%04X value 0x%04X\n", addr, data);
     }
 };
 
