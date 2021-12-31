@@ -29,6 +29,7 @@ class tms9900_t {
     uint16_t st;  //!< status register
     uint16_t pc;  //!< program counter
     uint16_t ir;  //!< Current instruction.
+    uint16_t prev_pc; //!< pc at the start of this instruction cycle.
     unsigned long cycles;
     unsigned long inst_count;
     bool stuck;
@@ -39,7 +40,8 @@ class tms9900_t {
     }
     virtual ~tms9900_t() {}
     void reset();
-    bool step();  //!< returns true if succesful, false if became stuck.
+    bool step();      //!< step one instruction. returns true if succesful, false if became stuck.
+    bool execute();   //!< execute an instruction in IR after fetch.
     int dasm_instruction(char *dst, uint16_t addr);
   protected:
     
@@ -68,6 +70,7 @@ class tms9900_t {
     void flags_012_others(uint16_t t);
     void do_parity(uint16_t src);
     void write_byte(uint16_t dst_addr, uint16_t dst);
+    uint16_t read_byte(uint16_t addr);
     void set_carry_add(unsigned dst) {
       // ST12 is carry
       st &= ~ST12;

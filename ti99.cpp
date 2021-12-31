@@ -43,6 +43,13 @@ struct tms9918_t {
     uint8_t regs[8];
     uint8_t framebuf[16*1024];
     unsigned name_table_addr;
+    uint8_t     hold_reg;
+    uint16_t    vram_addr;
+    bool        write_state;
+    unsigned    vdp_writes;     //!< debug counter
+    unsigned    vram_writes;    //!< debug counter
+    unsigned    reg_writes;     //!< debug counter
+    uint8_t     status;
     tms9918_t() {
         memset(regs,0,sizeof(regs));
     }
@@ -60,6 +67,13 @@ struct tms9918_t {
         memcpy(framebuf, vdptest_data, 16*1024);
         memcpy(regs, vdptest_data+16*1024, 8 );
         name_table_addr = regs[2] << 10;
+        hold_reg = 0;
+        write_state = false;
+        vram_addr = 0;
+        vdp_writes = 0;
+        vram_writes = 0;
+        status = 0;
+        reg_writes = 0;
     }     
     void scanline(int y) {
         // Render one scanline from framebuf to ti_rendered.
@@ -176,6 +190,66 @@ struct tms9918_t {
 
         }    
     }
+    /**
+     * @brief CPU write to VDP. 
+     * 
+     * @param regs_vram registers/data. A1 on the TI-99/4A
+     * @param data 
+     */
+    void write(bool regs_vram, uint8_t data) {
+        vdp_writes++;
+        if(regs_vram) {
+            if(!write_state) {
+                hold_reg = data;
+                write_state = true; 
+                // printf("TMS9918 hold reg 0x%02X\n", hold_reg);
+            } else {
+                switch(data >> 6) {
+                    case 0: // read from VRAM setup
+                        vram_addr = ((data & 0x3F) << 8) | hold_reg;
+                        // printf("Ready for VRAM read from 0x%04X\n", vram_addr);
+                        break;
+                    case 1: // write to VRAM setup
+                        vram_addr = ((data & 0x3F) << 8) | hold_reg;
+                        // printf("Ready for VRAM write to 0x%04X\n", vram_addr);
+                        break;
+                    case 2: // write to VDP register
+                        regs[data & 7] = hold_reg;
+                        // printf("VDP register %d write 0x%02X\n", data & 7, hold_reg);
+                        reg_writes++;
+                        break;
+                    default:
+                        break;
+                }
+                write_state = false;
+            }
+        } else {
+            write_state = false;    // accesses to VRAM port reset write state
+            framebuf[vram_addr] = data;
+            vram_addr = 0x3FFF & (vram_addr+1);
+            vram_writes++;
+        }
+    }
+    /**
+     * @brief CPU reads from VDP.
+     * 
+     * @param regs_vram      false: read from VRAM. true: read from status register.
+     * @return uint8_t  data from VRAM or status register.
+     */
+    uint8_t read(bool regs_vram) {
+        uint8_t result;
+        write_state = false;    // any read resets write state
+        if(regs_vram) {
+            result = status;
+            status &= 0x1F; // clear interrupt request, fifth sprite etc flags.
+        } else {
+            // read from VRAM.
+            result = framebuf[vram_addr];
+            // printf("VRAM read [0x%04X]=0x%02X\n", vram_addr, result);
+            vram_addr = 0x3FFF & (vram_addr+1);
+        }
+        return result;
+    }
 };
 
 tms9918_t tms9918;
@@ -188,7 +262,9 @@ extern "C" {
 class tigrom_t : public grom_t {
 protected:
     uint8_t read_mem(uint16_t addr) {
-        return grom994a_data[addr];
+        if(addr < 0x6000)
+            return grom994a_data[addr];
+        return 0;
     }
 };
 
@@ -197,15 +273,40 @@ tigrom_t grom;
 uint8_t scratchpad[256];
 
 class cpu_t : public tms9900_t {
+public:
+    unsigned dsr_mem_counter;       //!< count DSR region accesses
+    unsigned cart_counter;
+    uint8_t keyboard[8];
+    uint8_t keyscan;
+    cpu_t() {
+        dsr_mem_counter = 0;
+        cart_counter = 0;
+        memset(keyboard, 0xFF, sizeof(keyboard));
+        keyscan = 0;
+    }
 protected:
      virtual uint16_t read(uint16_t addr) {
          addr &= ~1; // make the address even
          if(addr < 0x2000) {
              return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
+         } else if(addr >= 0x4000 && addr< 0x5FFF) {
+             // No DSR memory for now.
+             dsr_mem_counter++;
+             return 0;
+         } else if(addr >= 0x6000 && addr < 0x8000) {
+             // Cartridge access - no cartridge
+             cart_counter++;
+             return 0;
          } else if(addr >= 0x8300 && addr <0x8400) {
              return (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
-         } else if(addr >= 0x8400 && addr<0x8800) {
+         } else if(addr >= 0x8400 && addr< 0x8800) {
              // sound chip access
+         } else if(addr >= 0x8800 && addr< 0x8C00) {
+             // VDP read.
+             uint16_t r = tms9918.read(!!(addr & 2));
+             return r << 8; 
+         } else if(addr >= 0x8C00 && addr< 0x9000) {
+             // VDP write port
          } else if(addr >= 0x9000 && addr < 0x9800) {
              // speech synthesizer
              return 0xAC00;
@@ -216,6 +317,19 @@ protected:
                 return grom.read(addr) << 8;
             else
                 return 0xAB00;  // dummy
+         } else if(addr >= 0xBD04 && addr< 0xBD08) {
+             printf("PC:%04X ST:%04X WP:%04X GROM:%04X (%04X)", 
+                prev_pc, st, wp, grom.get_read_addr(),
+                (scratchpad[0x72] << 8) | scratchpad[0x73]
+                );
+             // show GROM stack entries.
+             uint8_t p = scratchpad[0x73];
+             for(uint8_t u=0x7E; u<p; u+=2) {
+                 uint16_t entry = (scratchpad[u] << 8) | scratchpad[u+1];
+                 printf("%04X ", entry);
+             }
+             printf("mystery read from 0x%04X\n", addr);
+             return 0xDEAD;
          } else {
              stuck = true;
              printf("reading outside of memory: 0x%4X\n", addr);
@@ -229,6 +343,12 @@ protected:
              scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
          } else if(addr >= 0x8400 && addr < 0x8800) {
              // sound chip access
+         } else if(addr >= 0x8C00 && addr < 0x9000) {
+             // VDP write
+             tms9918.write(!!(addr & 2), data >> 8);
+             // static int count = 15;
+             // if(--count == 0)
+             //    stuck = true;
          } else if (addr >= 0x9c00 && addr < 0xA000) {
              grom.write(addr, data >> 8);
          } else if(addr >= 0x9400 && addr < 0x9800) {
@@ -237,13 +357,30 @@ protected:
              stuck = true;
              printf("writing outside of memory: 0x%4X\n", addr);
          }
-         printf("Writing to 0x%04X value 0x%04X, GROM addr 0x%04X\n", addr, data, grom.get_read_addr());
+         /*
+         printf("Writing to 0x%04X value 0x%04X, GROM addr 0x%04X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+            addr, data, grom.get_read_addr(), 
+            tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+            */
     }
     virtual void write_cru_bit(uint16_t addr, uint8_t data) {
-        printf("CRU write 0x%04X data %d\n", addr, data);
+        // printf("CRU write 0x%04X data %d\n", addr, data);
+        if(addr >= 0x24 && addr < 0x2A) {
+            // keyboard scanline setting
+            addr = (addr - 0x24) >> 1;
+            uint8_t bit = 1 << addr;
+            keyscan &= ~bit;
+            keyscan |= data & 1 ? bit : 0;
+        }
     }
     virtual uint8_t read_cru_bit(uint16_t addr) {
-        printf("CRU read 0x%04X\n", addr);
+        // printf("CRU read 0x%04X\n", addr);
+        if(addr >= 6 && addr < 0x16) {
+            // Keyboard matrix
+            uint8_t keyline = keyboard[keyscan];
+            addr = (addr - 6) >> 1;
+            return (keyline >> addr) & 1;
+        }
         return 1;
     }
 };
@@ -359,13 +496,49 @@ void update(uint32_t time) {
 */        
     }
     if(buttons.pressed & Button::X) {
-        cpu.reset();
-        printf("CPU reset\n");
-        while(!cpu.stuck) {
+        // cpu.reset();
+        if(cpu.stuck) {
+            printf("CPU Stuck\n");
+            return;
+        }
+        int loops = 5000;
+        while(!cpu.stuck && loops > 0) {
             char s[80];
             int t = cpu.dasm_instruction(s, cpu.pc);
-            printf("t=%d %04X %s\n", t, cpu.pc, s);
+            printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
             cpu.step();
+            loops--;
         }
+    }
+
+    if(!cpu.stuck) {
+        for(int i=0; i<5000 && !cpu.stuck; i++) {
+            cpu.step();
+            if(cpu.stuck) {
+                // oh no, we became stuck!
+                char s[80];
+                cpu.dasm_instruction(s, cpu.prev_pc);
+                printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                printf("GROM addr 0x%04X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+                    grom.get_read_addr(), 
+                    tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+            }
+        }
+        if(!cpu.stuck) {
+            fill_full_screen = false;
+            for(int y=0; y<192; y++)
+                tms9918.scanline(y);
+        }
+    }
+
+    if(buttons & Button::DPAD_LEFT) {
+        cpu.keyboard[5] &= ~(1 << 4);   // '1' down
+    } else
+        cpu.keyboard[5] |= (1 << 4);   // '1' up
+
+    if(buttons & Button::DPAD_RIGHT) {
+        cpu.keyboard[1] &= ~(1 << 4);   // '2' down
+    } else {
+        cpu.keyboard[1] |= ~(1 << 4);   // '2' up
     }
 }
