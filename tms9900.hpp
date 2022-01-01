@@ -43,8 +43,8 @@ class tms9900_t {
     bool step();      //!< step one instruction. returns true if succesful, false if became stuck.
     bool execute();   //!< execute an instruction in IR after fetch.
     int dasm_instruction(char *dst, uint16_t addr);
+    bool interrupt(uint8_t level);
   protected:
-    
     void do_exec0();
     void do_exec1();
     void do_exec2();
@@ -115,4 +115,5 @@ class tms9900_t {
     int dasm_one(char *buf, int state_in, int opcode);
     uint16_t read_operand(uint16_t op, bool word_operation);
     uint16_t source_address(uint16_t op, bool word_operation);
+    
 };

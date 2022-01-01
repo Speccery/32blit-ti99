@@ -3,6 +3,17 @@
 #include "tms9900.hpp"
 #include "grom.hpp"
 
+// #define VERIFY comes now from cmake
+
+#ifdef VERIFY
+#include "cpu9900.h"
+class tursi_cpu_t : public CPU9900 {
+public:
+    virtual Word GetSafeWord(int x, int bank);
+};
+tursi_cpu_t tursi_cpu;
+#endif
+
 extern "C" unsigned char vdptest_data[];
 
 using namespace blit;
@@ -14,6 +25,8 @@ uint8_t ti_rendered[TI_WIDTH/2*TI_HEIGHT];
 uint8_t full_screen_color = 0;
 bool fill_full_screen = true;
 bool debug_show_pixel = false;
+
+FILE *debug_log = nullptr;
 
 // #define DEBUG_PRINT
 
@@ -133,6 +146,10 @@ struct tms9918_t {
             }
             name_table_addr++;
         }
+        if(y == 191) {
+            // Generate interrupt at the end of the last scanline.
+            status |= 0x80;
+        }
     }
     void render(int yoffset) {
         // Now render from ti_rendered to our framebuffer.
@@ -241,6 +258,9 @@ struct tms9918_t {
         write_state = false;    // any read resets write state
         if(regs_vram) {
             result = status;
+            // if(interrupt_pending()) {
+            //     printf("VDP interrupt cleared.\n");
+            // }
             status &= 0x1F; // clear interrupt request, fifth sprite etc flags.
         } else {
             // read from VRAM.
@@ -249,6 +269,9 @@ struct tms9918_t {
             vram_addr = 0x3FFF & (vram_addr+1);
         }
         return result;
+    }
+    bool interrupt_pending() {
+        return !!(status & 0x80);
     }
 };
 
@@ -260,10 +283,41 @@ extern "C" {
 }
 
 class tigrom_t : public grom_t {
+    int addr_complete;
+    unsigned selected_groms;
+    bool show_cpu;
+public:
+    tigrom_t() {
+        addr_complete = 0;
+        selected_groms = 0;
+        show_cpu = false;
+    }
+    virtual void write(unsigned addr, uint8_t d) {
+        grom_t::write(addr, d);
+        addr_complete++;
+        if(addr_complete == 2) {
+            if(!(selected_groms & (1 << sel))) {
+                printf("GROM sel=%d offset=0x%04X selected for the first time.\n", sel, offset);
+                selected_groms |= 1 << sel;
+                show_cpu = true;
+            }
+            if(sel >= 3) {
+                printf("GROM sel=%d offset=0x%04X\n", sel, offset);
+                show_cpu = true;
+            }
+        } 
+    }
+    bool should_cpu_stat_be_shown() {
+        bool t = show_cpu;
+        show_cpu = false;
+        return t;
+    }
 protected:
     uint8_t read_mem(uint16_t addr) {
+        addr_complete = 0;
         if(addr < 0x6000)
             return grom994a_data[addr];
+        printf("Reading outside valid GROM area 0x%04X.\n", addr);
         return 0;
     }
 };
@@ -278,67 +332,234 @@ public:
     unsigned cart_counter;
     uint8_t keyboard[8];
     uint8_t keyscan;
+    unsigned tms9901_cru;
+    
+    // Verification system: Tursi's CPU is run first for one cycle.
+    // It reads actual "hardware" and stores read data to read verify buffer.
+    // It writes to write verify buffer.
+    // After that my CPU (tms9900_t) is run. It is not allowed to actually read, but rather
+    // we check that the reads are found in read verify buffer. If found, we use that data.
+    // If not found, we have a bug and must stop.
+    // When my CPU writes, the writes are matched with write verify buffer and then 
+    // actually written to "hardware".
+    bool     verify;                //!< when true verify mode is on.
+    uint16_t verify_wr_addrs[3], verify_wr_datas[3];    //!< Here we store write addresses and datas.
+    uint8_t  verify_wr_count;       //!< number of write cycles performed by the instruction
+    int      verify_wr_mask;        //!< bitmask corresponding to verify_wr_addrs
+
+    bool     verify_reads;          //!< When true reads target verify read buffer.
+    uint16_t verify_rd_addrs[8], verify_rd_datas[8];
+    uint8_t  verify_rd_count;
+    int      verify_rd_mask;
+
+
     cpu_t() {
         dsr_mem_counter = 0;
         cart_counter = 0;
         memset(keyboard, 0xFF, sizeof(keyboard));
         keyscan = 0;
+        verify = false;
+        tms9901_cru = ~0;
     }
+public:
+    uint16_t verify_read(uint16_t addr) {
+        return read(addr);
+    }
+    void verify_write(uint16_t addr, uint16_t data) {
+        if(verify) {
+            if(verify_wr_count >= sizeof(verify_wr_addrs)/sizeof(verify_wr_addrs[0])) {
+                printf("verify_write - bug, too many writes per instruction.\n");
+                stuck = true;
+            } else {
+                verify_wr_addrs[verify_wr_count] = addr;
+                verify_wr_datas[verify_wr_count] = data;
+                verify_wr_count++;
+            }
+        } else 
+            write(addr,data);   // Just write
+    }
+    void verify_write_cru_bit(uint16_t addr, uint8_t data) {
+        write_cru_bit(addr, data);
+    }
+    uint8_t verify_read_cru_bit(uint16_t addr) {
+        return read_cru_bit(addr);
+    }
+    void verify_begin() {
+        verify = true;
+        verify_reads = false;
+        verify_wr_count = 0;
+        verify_wr_mask = 0;
+        verify_rd_count = 0;
+        verify_rd_mask = 0;
+    }
+    void verify_switch_on_reads() {
+        verify_reads = true;
+    }
+    void verify_show_rd_buffer() {
+        printf("Instruction 0x%04X read verify error, count %d mask %d.\n", 
+            prev_pc,
+            verify_rd_count, verify_rd_mask);
+        for(int i=0; i<verify_rd_count; i++) {
+            printf("read buffer[%d]: [%04X]=%04X\n", i, verify_rd_addrs[i], verify_rd_datas[i]);
+        }
+    }
+    void verify_show_wr_buffer() {
+        printf("Instruction 0x%04X write verify error, count %d mask %d.\n", 
+            prev_pc,
+            verify_wr_count, verify_wr_mask);
+        for(int i=0; i<verify_wr_count; i++) {
+            printf("write buffer[%d]: [%04X]=%04X\n", i, verify_wr_addrs[i], verify_wr_datas[i]);
+        }
+    }
+    void verify_end() {
+        // Check that all writes have been accounted for.
+        //                    0  1  2  3   4   5   6    7   8
+        const int masks[] = { 0, 1, 3, 7, 15, 31, 63, 127, 255 };
+        if(verify_wr_mask != masks[verify_wr_count]) {
+            stuck = true;
+            verify_show_wr_buffer();
+        }
+        // Check that all reads have been accounted for.
+        if(verify_rd_mask != masks[verify_rd_count]) {
+            stuck = true;
+            verify_show_rd_buffer();
+        }
+        verify = false;
+        verify_reads = false;
+    }
+    void verify_add_read_to_buffer(uint16_t addr, uint16_t data) {
+        if(verify_rd_count >= sizeof(verify_rd_addrs)/sizeof(verify_rd_addrs[0])) {
+            printf("verify_read - bug, too many reads per instruction.\n");
+            stuck = true;
+        } else {
+            // Check that this address in not already in the buffer before adding it.
+            for(int i=0; i<verify_rd_count; i++) {
+                if(addr == verify_rd_addrs[i] && data == verify_rd_datas[i]) 
+                    return; // Don't add it again.
+            }
+            verify_rd_addrs[verify_rd_count] = addr;
+            verify_rd_datas[verify_rd_count] = data;
+            verify_rd_count++;
+        }
+    }
+
 protected:
+    void check_write_in_verify_buffer(uint16_t addr, uint16_t data) {
+        // Make sure that our write verify buffer has this write included.
+        for(int i=0; i<verify_wr_count; i++) {
+            if(addr == verify_wr_addrs[i] && data == verify_wr_datas[i] && !(verify_wr_mask & (1 << i))) {
+                verify_wr_mask |= 1 << i;  // this slot verified properly.
+                return;
+            }
+        }
+        // Verify not found in buffer.
+        stuck = true;
+        printf("Instruction write [%04X]=%04X not found in verify buffer.\n", addr, data);
+        for(int i=0; i<verify_wr_count; i++) {
+            printf("write buffer[%d]: [%04X]=%04X\n", i, verify_wr_addrs[i], verify_wr_datas[i]);
+        }
+    }
+    uint16_t check_read_in_verify_buffer(uint16_t addr) {
+        for(int i=0; i<verify_rd_count; i++) {
+            if(addr == verify_rd_addrs[i] && !(verify_rd_mask & (1 << i))) {
+                verify_rd_mask |= 1 << i;  // this slot verified properly.
+                return verify_rd_datas[i];
+            }
+        }
+        // Make another pass to check if the desired read is in the buffer but already used. This can happen
+        // since a CPU can read the same location more than once, and for writes we don't insert
+        // the same stuff twice.
+        for(int i=0; i<verify_rd_count; i++) {
+            if(addr == verify_rd_addrs[i]) {
+                return verify_rd_datas[i];
+            }
+        }
+        // Verify not found in buffer.
+        stuck = true;
+        printf("Instruction at 0x%04X\n", prev_pc);
+        printf("Instruction read [%04X] not found in verify buffer. count %d mask %d\n", addr, verify_rd_count, verify_rd_mask);
+        for(int i=0; i<verify_rd_count; i++) {
+            printf("read buffer[%d]: [%04X]=%04X\n", i, verify_rd_addrs[i], verify_rd_datas[i]);
+        }
+        return 0xDEAD;
+    }
+
+    void show_cpu() {
+        printf("%6ld PC:%04X ST:%04X WP:%04X GROM:%04X %02X (%04X) ", 
+            inst_count,
+            prev_pc, st, wp, grom.get_read_addr(),
+            grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+            (scratchpad[0x72] << 8) | scratchpad[0x73]
+            );
+        // show GROM stack entries.
+        uint8_t p = scratchpad[0x73];
+        for(uint8_t u=0x7E; u<p; u+=2) {
+            uint16_t entry = (scratchpad[u] << 8) | scratchpad[u+1];
+            printf("%04X ", entry);
+        }
+    }
+
      virtual uint16_t read(uint16_t addr) {
          addr &= ~1; // make the address even
+         if(verify_reads) {
+             return check_read_in_verify_buffer(addr);
+         }
+         uint16_t read_value = 0xdead;
          if(addr < 0x2000) {
-             return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
+             read_value =  (rom994a_data[addr] << 8) | rom994a_data[addr+1];
          } else if(addr >= 0x4000 && addr< 0x5FFF) {
              // No DSR memory for now.
              dsr_mem_counter++;
-             return 0;
+             read_value =  0;
          } else if(addr >= 0x6000 && addr < 0x8000) {
              // Cartridge access - no cartridge
              cart_counter++;
-             return 0;
+             read_value =  0;
          } else if(addr >= 0x8300 && addr <0x8400) {
-             return (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
+             read_value =  (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
          } else if(addr >= 0x8400 && addr< 0x8800) {
              // sound chip access
          } else if(addr >= 0x8800 && addr< 0x8C00) {
              // VDP read.
              uint16_t r = tms9918.read(!!(addr & 2));
-             return r << 8; 
+             read_value =  r << 8; 
          } else if(addr >= 0x8C00 && addr< 0x9000) {
              // VDP write port
          } else if(addr >= 0x9000 && addr < 0x9800) {
              // speech synthesizer
-             return 0xAC00;
+             read_value =  0xAC00;
          } else if(addr >= 0x9800 && addr < 0xA000) {
              // GROM reads. 9800..9BFF is the actual read area.
              // 9C00..9FFF is write port, but read due to read-modify-write architecture.
              if(addr >= 9800 && addr < 0x9C00)
-                return grom.read(addr) << 8;
+                read_value =  grom.read(addr) << 8;
             else
-                return 0xAB00;  // dummy
-         } else if(addr >= 0xBD04 && addr< 0xBD08) {
-             printf("PC:%04X ST:%04X WP:%04X GROM:%04X (%04X)", 
-                prev_pc, st, wp, grom.get_read_addr(),
-                (scratchpad[0x72] << 8) | scratchpad[0x73]
-                );
-             // show GROM stack entries.
-             uint8_t p = scratchpad[0x73];
-             for(uint8_t u=0x7E; u<p; u+=2) {
-                 uint16_t entry = (scratchpad[u] << 8) | scratchpad[u+1];
-                 printf("%04X ", entry);
-             }
+                read_value =  0xAB00;  // dummy
+         } /* else if(addr >= 0xBD04 && addr< 0xBD08) {
+             show_cpu();
              printf("mystery read from 0x%04X\n", addr);
-             return 0xDEAD;
-         } else {
+             read_value =  0xDEAD;
+         } */ else {
              stuck = true;
              printf("reading outside of memory: 0x%4X\n", addr);
+             if(debug_log) 
+                fprintf(debug_log, "reading outside of memory: 0x%4X\n", addr);
          }
-         return 0xdead;
+         if(verify) {
+             // Store this read to verify read buffer.
+             verify_add_read_to_buffer(addr, read_value);
+         }
+         return read_value;
     }
     virtual void write(uint16_t addr, uint16_t data) {
         addr &= ~1; // make the addres even
-         if(addr >= 0x8300 && addr < 0x8400) {
+
+        if(verify)
+            check_write_in_verify_buffer(addr, data);
+
+         if(addr >= 0 && addr < 0x2000) {
+             printf("Write to ROM [%04X]=%04X\n", addr, data);
+         } else if(addr >= 0x8300 && addr < 0x8400) {
              scratchpad[addr - 0x8300] = data >> 8;
              scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
          } else if(addr >= 0x8400 && addr < 0x8800) {
@@ -351,11 +572,19 @@ protected:
              //    stuck = true;
          } else if (addr >= 0x9c00 && addr < 0xA000) {
              grom.write(addr, data >> 8);
+             if(grom.should_cpu_stat_be_shown())
+                show_cpu();
          } else if(addr >= 0x9400 && addr < 0x9800) {
              // Speech write, do nothing.
          } else {
              stuck = true;
-             printf("writing outside of memory: 0x%4X\n", addr);
+             printf("writing outside of memory: 0x%04X\n", addr);
+         }
+         if(debug_log) {
+             fprintf(debug_log, "[0x%04X]=0x%04X, GROM addr 0x%04X *0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+                addr, data, grom.get_read_addr(), 
+                grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+                    tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
          }
          /*
          printf("Writing to 0x%04X value 0x%04X, GROM addr 0x%04X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
@@ -371,6 +600,11 @@ protected:
             uint8_t bit = 1 << addr;
             keyscan &= ~bit;
             keyscan |= data & 1 ? bit : 0;
+        } 
+        if(addr < 0x40) {
+            unsigned bit = 1 << (addr >> 1);
+            tms9901_cru &= ~bit;
+            tms9901_cru |= data ? bit : 0;
         }
     }
     virtual uint8_t read_cru_bit(uint16_t addr) {
@@ -381,6 +615,12 @@ protected:
             addr = (addr - 6) >> 1;
             return (keyline >> addr) & 1;
         }
+        // VDP Interrupt bit
+        if(addr == 4) {
+            // printf("Reading CRU 4\n");
+            return tms9918.interrupt_pending() ? 0 : 1;
+        }
+
         return 1;
     }
 };
@@ -406,6 +646,12 @@ void init() {
     printf("About to enter cpu.reset()\n");
     cpu.reset();
     printf("Completed cpu.reset()\n");
+
+#ifdef VERIFY
+    printf("About to enter tursi_cpu.reset()\n");   
+    tursi_cpu.reset();
+    printf("Completed tursi_cpu.reset()\n");
+#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -426,7 +672,9 @@ void render(uint32_t time) {
     screen.pen = Pen(255, 255, 255);
     screen.rectangle(Rect(0, 0, 320, 14));
     screen.pen = Pen(0, 0, 0);
-    screen.text("TI-99/4A " + std::to_string(cpu.pc) + " " + std::to_string(cpu.inst_count) + " " + (cpu.stuck ? "STUCK" : ""),
+    char s[10];
+    sprintf(s, "%04X ", cpu.pc);
+    screen.text("TI-99/4A " + std::string(s) + " " + std::to_string(cpu.inst_count) + " " + (cpu.stuck ? "STUCK" : ""),
          minimal_font, Point(5, 4));
 
     if(fill_full_screen) {
@@ -461,6 +709,35 @@ void render(uint32_t time) {
 
 }
 
+#ifdef VERIFY
+void run_verify_step(bool verbose=true) {
+    // First run Tursi's CPU, then mine and compare output.
+    if(verbose) {
+        char s[80];
+        cpu.dasm_instruction(s, tursi_cpu.GetPC());
+        printf("%d %04X %s\n", tursi_cpu.GetCycleCount(), tursi_cpu.GetPC(), s);
+    }
+    cpu.verify_begin();
+    if(verbose)
+        printf("Tursi's CPU running. ");
+    tursi_cpu.ExecuteOpcode();
+    cpu.verify_switch_on_reads();
+    if(verbose)
+        printf("My CPU running.\n");
+    cpu.step();
+    cpu.verify_end();
+    // printf("Verify ended.\n");
+    if(tursi_cpu.GetST() != cpu.st) {
+        cpu.stuck = true;
+        printf("ST verify error: tursi %04X my %04X\n", tursi_cpu.GetST(), cpu.st);
+        printf("PC Tursi %04X me %04X\n", tursi_cpu.GetPC(), cpu.pc);
+        printf("WP Tursi %04X me %04X\n", tursi_cpu.GetWP(), cpu.wp);
+        cpu.verify_show_rd_buffer();
+        cpu.verify_show_wr_buffer();
+    }
+}
+#endif
+
 ///////////////////////////////////////////////////////////////////////////
 //
 // update(time)
@@ -469,6 +746,8 @@ void render(uint32_t time) {
 // amount if milliseconds elapsed since the start of your game
 //
 void update(uint32_t time) {
+    static bool disasm = false;
+    static int vdp_ints = 0;
 
     if(buttons.pressed & Button::A) {
         // Advance to next color.
@@ -501,6 +780,9 @@ void update(uint32_t time) {
             printf("CPU Stuck\n");
             return;
         }
+#ifdef VERIFY
+        run_verify_step();
+#else
         int loops = 5000;
         while(!cpu.stuck && loops > 0) {
             char s[80];
@@ -509,30 +791,95 @@ void update(uint32_t time) {
             cpu.step();
             loops--;
         }
+#endif        
     }
 
-    if(!cpu.stuck) {
+    if(!cpu.stuck && 1) {
         for(int i=0; i<5000 && !cpu.stuck; i++) {
+#ifdef VERIFY
+            uint16_t a = tursi_cpu.GetPC();
+            run_verify_step(false);
+            if(cpu.stuck) {
+                char s[80];
+                cpu.dasm_instruction(s, a);
+                printf("STUCK %d %04X %s\n", tursi_cpu.GetCycleCount(), tursi_cpu.GetPC(), s);
+            }
+
+            // Check interrupt status every 16 instructions
+            if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
+                // printf("Interrupt stuff begin %ld.\n", cpu.inst_count);
+                uint16_t cst = cpu.st;
+                cpu.verify_begin();
+                // BUGBUG CRU masking not done yet.
+                if((tursi_cpu.GetST() & 0xF) > 1)
+                    tursi_cpu.TriggerInterrupt(4);
+                cpu.verify_switch_on_reads();
+                bool b = cpu.interrupt(1);
+                cpu.verify_end();
+                // printf("Interrupt stuff end. CPU did vector: %s \n", b ? "true" : "false");
+                if(b) {
+                    printf("CPU vectored to interrupt, 0x%04X.\n", cst);
+                    vdp_ints++;
+                }
+            }
+#else
+            if(disasm) {
+                char s[80];
+                cpu.dasm_instruction(s, cpu.prev_pc);
+                printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                if(debug_log) {
+                    fprintf(debug_log, "%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                    fflush(debug_log);
+                }
+            }
+
             cpu.step();
+            if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
+                // VDP interrupt
+                uint16_t cst = cpu.st;
+                bool b = cpu.interrupt(1);
+                if(b) {
+                    // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
+                    vdp_ints++;
+                }
+            }
             if(cpu.stuck) {
                 // oh no, we became stuck!
                 char s[80];
                 cpu.dasm_instruction(s, cpu.prev_pc);
                 printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
-                printf("GROM addr 0x%04X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+                printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
                     grom.get_read_addr(), 
+                    grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
                     tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+                if(debug_log) {
+                    fprintf(debug_log, "CPU STUCK\n");
+                    fprintf(debug_log, "%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                    fprintf(debug_log, "GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+                        grom.get_read_addr(), 
+                        grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+                        tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+                    fflush(debug_log);
+                }
             }
+#endif
         }
         if(!cpu.stuck) {
             fill_full_screen = false;
             for(int y=0; y<192; y++)
-                tms9918.scanline(y);
+                tms9918.scanline(y);    
         }
     }
 
     if(buttons & Button::DPAD_LEFT) {
         cpu.keyboard[5] &= ~(1 << 4);   // '1' down
+/*        
+        if(!disasm) {
+            disasm = true;
+            cpu.inst_count = 0;
+            debug_log = fopen("debug.txt", "wt");
+        }
+*/        
     } else
         cpu.keyboard[5] |= (1 << 4);   // '1' up
 
@@ -541,4 +888,43 @@ void update(uint32_t time) {
     } else {
         cpu.keyboard[1] |= ~(1 << 4);   // '2' up
     }
+    if(buttons.pressed & Button::DPAD_UP) {
+        printf("TMS9901 CRU 0x%08X VDP pending %d VDP ints %d\n",
+            cpu.tms9901_cru, tms9918.interrupt_pending(), vdp_ints
+        );
+    }
 }
+
+#ifdef VERIFY
+
+Word tursi_cpu_t::GetSafeWord(int x, int bank) {
+    return cpu.verify_read(x);
+}
+
+void wrword(Word x, Word y)
+{ 
+	x&=0xfffe;		// drop LSB
+	// now write the new data
+	// wcpubyte(x,(Byte)(y>>8));
+	// wcpubyte(x+1,(Byte)(y&0xff));
+
+    cpu.verify_write(x, y);
+}
+
+Word romword(Word x, bool rmw)
+{ 
+	x&=0xfffe;		// drop LSB
+//	// TODO: this reads the LSB first. Is this the correct order??
+// 	return((rcpubyte(x,rmw)<<8)+rcpubyte(x+1,rmw));
+    return cpu.verify_read(x);
+}
+
+void wcru(Word addr,int data) {
+    cpu.verify_write_cru_bit(addr << 1, data) ;
+}
+
+int rcru(Word addr) {
+  return cpu.verify_read_cru_bit( addr << 1);
+}
+
+#endif

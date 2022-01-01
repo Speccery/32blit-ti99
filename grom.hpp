@@ -33,7 +33,7 @@ public:
     }
     return r;
   }
-  void write(unsigned addr, uint8_t d) {
+  virtual void write(unsigned addr, uint8_t d) {
     if(addr & 2) {
       // write to address counter
       uint16_t old_offset = offset;
@@ -41,7 +41,6 @@ public:
       sel = (old_offset >> 5) & 7;
       base = 0xF & (addr >> 2);
       update_read_addr();
-      // printf("GROM sel=%d offset=0x%04X\n", sel, offset);
     }
   }
   uint16_t get_read_addr() const {

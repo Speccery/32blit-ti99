@@ -80,7 +80,7 @@ const instrucion_t instructions[] = {
     { 0x0200, 0xFFE0, immediates, "LI" },
     { 0x0260, 0xFFE0, immediates, "ORI" },
     // internal register load immediate
-    { 0x0270, 0xFFE0, internal_immediates, "LWPI"},
+    { 0x02E0, 0xFFE0, internal_immediates, "LWPI"},
     { 0x0300, 0xFFE0, internal_immediates, "LIMI"},
     // internal register store
     { 0x02C0, 0xFFE0, internal_store, "STST"},
@@ -305,6 +305,7 @@ void tms9900_t::do_exec0() {
           dst = src;
         dst >>= shift_count;
         // Set carry, the last bit shifted out. Carry bit 16 of dst.
+        dst &= ~0x10000;
         dst |= (src << (17 - shift_count)) & 0x10000;
         break;
       case 1: // SRL
@@ -315,12 +316,20 @@ void tms9900_t::do_exec0() {
         // src: 0x8000, shift_count=16: shift=1 left, result 0x10000 ok
         // src: 0x0001, shift_count=1: shift=16 left, result 0x10000 ok
         break;
-      case 2: // SLA
-        dst = src << shift_count;
-        // ST11 is set (overflow) for sign changing SLA
-        st &= ~ST11;
-        st |= (dst & 0x8000) != (src & 0x8000) ? ST11 : 0;
+      case 2: { // SLA
+        uint16_t original_sign = src & 0x8000;
+        // ST11 is set (overflow) for sign changing during shifting.
+        // potentially a BUG with icy99 core, needs checking. CHECKME
+        st &= ~ST11;  // No sign changing seen
+        dst = src;
+        for(unsigned u=0; u<shift_count; u++) {
+          dst <<= 1;
+          if(original_sign != (dst & 0x8000)) {
+            st |= ST11; // Sign change detected.
+          }
+        }
         break;
+      }
       case 3: // SRC
         dst = (src << 16) | src;
         dst >>= shift_count;
@@ -353,7 +362,7 @@ void tms9900_t::do_exec0() {
         execute();
         return;
       }
-      case  3: write(sa, 0); return;                // CLR
+      case  3: read(sa); write(sa, 0); return;      // CLR (with dummy read)
       case  4: {                                    // NEG
         const uint16_t r = read( sa );
         unsigned result = -r;
@@ -398,7 +407,7 @@ void tms9900_t::do_exec0() {
         write(sa, (src << 8) | (src >> 8));
         return;
       }
-      case 12: write(sa, 0xFFFF); return;           // SETO
+      case 12: read(sa); write(sa, 0xFFFF); return; // SETO with dummy read.
       default:
         stuck = true;
         return;
@@ -467,6 +476,17 @@ void tms9900_t::do_exec0() {
     }
     case 0x02A0: {      // STWP
       write_reg(ir & 0xF, wp);
+      return;
+    }
+    case 0x02E0: {      // LWPI
+      uint16_t imm = next();
+      wp = imm;
+      return;
+    }
+    case 0x0380: {      // RTWP
+      pc = read(wp + (14 << 1));
+      st = read(wp + (15 << 1));
+      wp = read(wp + (13 << 1));
       return;
     }
   }
@@ -551,9 +571,13 @@ void tms9900_t::do_exec3() {
       count = 16;
     bool byteop = count <= 8;
     uint16_t addr = read_reg(12);
-    uint16_t src = read_operand(ir & 0x3F, byteop);
+    // uint16_t sa = source_address(
+    // uint16_t src = read( sa );
+    uint16_t src = read_operand(ir & 0x3F, !byteop);
     flags_012_others(src);
     if(byteop) {
+      // printf("LDCR (SA=0x%04X)=0x%04X\n", sa, src);
+      // printf("LDCR (SA)=0x%04X\n", src);
       do_parity(src);
       src >>= 8;
     }
@@ -589,7 +613,7 @@ void tms9900_t::do_exec3() {
     return;
   } else if((ir & 0xFC00) == 0x3800) { // MPY
     const uint16_t src = read_operand(ir & 0x3F, true);
-    const uint16_t dst_addr = wp + ((ir >> 6) & 0x3F);
+    const uint16_t dst_addr = wp + (((ir >> 6) & 0xF) << 1);
     const uint16_t dst = read(dst_addr);
     unsigned result = src*dst;
     write(dst_addr, result >> 16);
@@ -597,7 +621,7 @@ void tms9900_t::do_exec3() {
     return;
   } else if((ir & 0xFC00) == 0x3C00) { // DIV
     const uint16_t src = read_operand(ir & 0x3F, true);
-    const uint16_t dst_addr = wp + ((ir >> 6) & 0x3F);
+    const uint16_t dst_addr = wp + (((ir >> 6) & 0xF) << 1);
     const uint16_t dst0 = read(dst_addr);
     const uint16_t dst1 = read(dst_addr+2);
     st &= ~ST11;
@@ -659,18 +683,16 @@ void tms9900_t::do_exec8() {    // C
   const uint16_t src = read_operand(ir, true);
   const uint16_t dst_addr = source_address(ir >> 6, true);
   const uint16_t dst = read(dst_addr);
-  const unsigned result = dst - src;
-  flags_012_others(result);
+  set_flags_compare(dst, src);
 }
 
 void tms9900_t::do_exec9() {    // CB
   const uint16_t src = read_operand(ir, false);
   const uint16_t dst_addr = source_address(ir >> 6, false);
   const uint16_t dst = read_byte(dst_addr);
-  const unsigned result = dst-src;
   // printf("CB src=0x%04X dst=0x%04X result=0x%X\n", src, dst, result);
-  flags_012_others(result);
-  do_parity(result);
+  set_flags_compare(dst, src);
+  do_parity(src);
 }
 
 void tms9900_t::do_execA() {    // A add
@@ -701,6 +723,7 @@ void tms9900_t::do_execC() {    // MOV
   uint16_t src = read_operand(ir, true);
   uint16_t dst_addr = source_address(ir >> 6, true);
   flags_012_others(src);
+  read(dst_addr); // Dummy read but needed for compatibility
   write(dst_addr, src);
 }
 
@@ -761,7 +784,7 @@ uint16_t tms9900_t::read_byte(uint16_t addr) {
 }
 
 void tms9900_t::do_parity(uint16_t src) {
-  // Byte operations set parity
+  // Byte operations set parity from high byte of src.
   st &= ~ST10;
   uint16_t paritys = (src >> 7) ^ (src >> 6) ^ (src >> 5) ^(src >> 4) ^ (src >> 3) ^ (src >> 2) ^ (src >> 1) ^ src;
   st |= 0x100 & paritys ? ST10 : 0;
@@ -819,3 +842,15 @@ uint16_t tms9900_t::source_address(uint16_t op, bool word_operation) {
   return 0; // never executed
 }
 
+bool tms9900_t::interrupt(uint8_t level) {
+  uint8_t current_level = st & 0xF;
+  if(level < current_level) {
+    // Now force the interrupt.
+    do_blwp(level << 2);
+    // change current interrupt priority
+    st &= ~0xF;
+    st |= level;
+    return true;
+  }
+  return false;
+}

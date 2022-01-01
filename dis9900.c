@@ -88,7 +88,7 @@ struct instrucion_t {
     { 0x0200, 0xFFE0, immediates, "LI" },
     { 0x0260, 0xFFE0, immediates, "ORI" },
     // internal register load immediate
-    { 0x0270, 0xFFE0, internal_immediates, "LWPI"},
+    { 0x02E0, 0xFFE0, internal_immediates, "LWPI"},
     { 0x0300, 0xFFE0, internal_immediates, "LIMI"},
     // internal register store
     { 0x02C0, 0xFFE0, internal_store, "STST"},
