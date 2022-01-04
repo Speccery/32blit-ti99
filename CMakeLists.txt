@@ -5,11 +5,11 @@ cmake_minimum_required(VERSION 3.9)
 project(ti99)
 
 # Add your sources here (adding headers is optional, but helps some CMake generators)
-add_compile_definitions(VERIFY)
-set(PROJECT_SOURCE ti99.cpp ti99.hpp vdptest.c tms9900.cpp 994arom.c 994agrom.c cpu9900.cpp tursicpu.cpp invadersrom.c invadersgrom.c)
+# add_compile_definitions(VERIFY)
+# set(PROJECT_SOURCE ti99.cpp ti99.hpp vdptest.c tms9900.cpp 994arom.c 994agrom.c cpu9900.cpp tursicpu.cpp invadersrom.c invadersgrom.c)
 
 # Normal execution without verify below:
-# set(PROJECT_SOURCE ti99.cpp ti99.hpp vdptest.c tms9900.cpp 994arom.c 994agrom.c invadersrom.c invadersgrom.c)
+set(PROJECT_SOURCE ti99.cpp ti99.hpp vdptest.c tms9900.cpp 994arom.c 994agrom.c invadersrom.c invadersgrom.c)
 
 
 
