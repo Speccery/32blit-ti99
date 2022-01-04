@@ -500,9 +500,9 @@ void tms9900_t::do_exec1() {
   switch((ir >> 8) & 0xF) {
     case 0: pc += offset;                                           return; // JMP
     case 1: if(!(st & (ST14 | ST13)))                 pc += offset; return; // JLT
-    case 2: if(!(st & ST15) && (st & ST13))           pc += offset; return; // JLE
+    case 2: if(!(st & ST15) || (st & ST13))           pc += offset; return; // JLE
     case 3: if(st & ST13)                             pc += offset; return; // JEQ
-    case 4: if((st & (ST15 | ST13)) == (ST15 | ST13)) pc += offset; return; // JHE
+    case 4: if((st & (ST15 | ST13)))                  pc += offset; return; // JHE
     case 5: if(st & ST14)                             pc += offset; return; // JGT
     case 6: if(!(st & ST13))                          pc += offset; return; // JNE
     case 7: if(!(st & ST12))                          pc += offset; return; // JNC

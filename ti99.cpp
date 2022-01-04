@@ -280,6 +280,8 @@ tms9918_t tms9918;
 extern "C" {
     extern const unsigned char rom994a_data[];
     extern const unsigned char grom994a_data[];
+    extern const unsigned char rominvaders_data[];
+    extern const unsigned char grominvaders_data[];
 }
 
 class tigrom_t : public grom_t {
@@ -301,7 +303,7 @@ public:
                 selected_groms |= 1 << sel;
                 show_cpu = true;
             }
-            if(sel >= 3) {
+            if(sel >= 4) {
                 printf("GROM sel=%d offset=0x%04X\n", sel, offset);
                 show_cpu = true;
             }
@@ -317,6 +319,8 @@ protected:
         addr_complete = 0;
         if(addr < 0x6000)
             return grom994a_data[addr];
+        if(addr < 0x8000)
+            return grominvaders_data[addr - 0x6000];
         printf("Reading outside valid GROM area 0x%04X.\n", addr);
         return 0;
     }
@@ -512,9 +516,10 @@ protected:
              dsr_mem_counter++;
              read_value =  0;
          } else if(addr >= 0x6000 && addr < 0x8000) {
-             // Cartridge access - no cartridge
+             // Cartridge access 
+             read_value = (rominvaders_data[addr - 0x6000] << 8) 
+                        |  rominvaders_data[addr - 0x6000+1];
              cart_counter++;
-             read_value =  0;
          } else if(addr >= 0x8300 && addr <0x8400) {
              read_value =  (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
          } else if(addr >= 0x8400 && addr< 0x8800) {
@@ -712,6 +717,8 @@ void render(uint32_t time) {
 #ifdef VERIFY
 void run_verify_step(bool verbose=true) {
     // First run Tursi's CPU, then mine and compare output.
+    uint16_t tpc = tursi_cpu.GetPC();
+    uint16_t mpc = cpu.pc;
     if(verbose) {
         char s[80];
         cpu.dasm_instruction(s, tursi_cpu.GetPC());
@@ -727,11 +734,15 @@ void run_verify_step(bool verbose=true) {
     cpu.step();
     cpu.verify_end();
     // printf("Verify ended.\n");
-    if(tursi_cpu.GetST() != cpu.st) {
+    if(tursi_cpu.GetST() != cpu.st || tursi_cpu.GetPC() != cpu.pc || tursi_cpu.GetWP() != cpu.wp) {
         cpu.stuck = true;
-        printf("ST verify error: tursi %04X my %04X\n", tursi_cpu.GetST(), cpu.st);
+        char s[80];
+        cpu.dasm_instruction(s, tpc);
+        printf("%d %04X %s\n", tursi_cpu.GetCycleCount(), tpc, s);
+        printf("ST Tursi %04X my %04X\n", tursi_cpu.GetST(), cpu.st);
         printf("PC Tursi %04X me %04X\n", tursi_cpu.GetPC(), cpu.pc);
         printf("WP Tursi %04X me %04X\n", tursi_cpu.GetWP(), cpu.wp);
+        printf("old PC Tursi %04X me %04X\n", tpc, mpc);
         cpu.verify_show_rd_buffer();
         cpu.verify_show_wr_buffer();
     }
@@ -886,7 +897,7 @@ void update(uint32_t time) {
     if(buttons & Button::DPAD_RIGHT) {
         cpu.keyboard[1] &= ~(1 << 4);   // '2' down
     } else {
-        cpu.keyboard[1] |= ~(1 << 4);   // '2' up
+        cpu.keyboard[1] |= (1 << 4);   // '2' up
     }
     if(buttons.pressed & Button::DPAD_UP) {
         printf("TMS9901 CRU 0x%08X VDP pending %d VDP ints %d\n",
