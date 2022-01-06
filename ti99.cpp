@@ -136,6 +136,95 @@ struct tms9918_t {
         d[2] = ((k & 3) << 6);    // B        
     }
 
+    void sprites(int y, uint8_t *destline) {
+        // Check number of active sprites
+        // printf("sprites %d entry\n", y);
+        uint16_t vram_base = (regs[5] & 0x7F) << 7; // start address of sprite attributes
+        int i = 0;
+        bool sig_5th_pending = false;
+
+        uint8_t     sprites_to_draw[32];
+        uint16_t    yys[32];
+        unsigned active_sprites = 0;
+
+        for(i=0; i<32; i++) {
+            unsigned yy = framebuf[vram_base + (i << 2)];
+            if(yy == 0xD0)
+                break;
+            // sprite active on this line.
+            yy = (yy & 0xE0) == 0xE0 ? yy & 0x1F : 0x100 | yy;
+            unsigned sprite_line_check = (y | 0x100) - yy - 1;
+            if( ((regs[1] & 2) && ((sprite_line_check & ~0xF) == 0)) ||       // 16x16 sprite check
+                (!(regs[1] & 2) && ((sprite_line_check & ~0x1F) == 0))) {     // 8x8 sprite check
+                    sprites_to_draw[active_sprites] = i;
+                    yys[active_sprites] = sprite_line_check;
+                    ++ active_sprites;
+            }
+            if(active_sprites == 5)
+                sig_5th_pending = true;
+        }
+        // printf("active_sprites %d\n", active_sprites);
+        // Draw sprites in the array sprites_to_draw.
+        for(int i=active_sprites-1; i>=0; i--) {
+            unsigned n = sprites_to_draw[i];
+            //  if(n == 0)
+            //      printf("Drawing sprite %d vram_base=0x%04X y=%d\n", n, vram_base+(n << 2), framebuf[vram_base + (n << 2) + 0]);
+            unsigned ux = framebuf[vram_base + (n << 2) + 1];
+            uint8_t name = framebuf[vram_base + (n << 2) + 2];
+            uint8_t color = framebuf[vram_base + (n << 2) + 3];
+            uint16_t vrama = (regs[6] & 7) << 11;
+            if(regs[1] & 2) 
+                vrama |= ((name & 0xFC) << 3) | (yys[i] & 0xF);    // 16x16
+            else
+                vrama |= (name << 3) | (yys[i] & 0x7);    // 8x8
+            uint16_t pixels = framebuf[vrama] << 8;
+            pixels |= framebuf[vrama | 0x10];               // Read 8 more pixels for 16x16 sprites
+            unsigned count = regs[1] & 2 ? 16 : 8;
+            unsigned early_clocks = 0;
+            if(color & 0x80) {
+                // early bit set.
+                if(ux >= 32) {
+                    ux -= 32;       // Already past 32, just draw
+                } else {
+                    early_clocks = 32 - (ux & 0x1F);
+                    ux = 0;         // sprite bleeds in from the left.
+                }
+            } else {
+                // Normal. Early bit not set.
+                early_clocks = 0;
+            }
+            // if(color & 0x80)
+            //    printf("Ready to draw ux=%d early_clocks=%d pixels=0x%04X\n",ux, early_clocks, pixels);
+            // Now ux is the X coordinate where the sprite goes to.
+            // Draw the sprite.
+            color &= 0xF;
+            uint8_t *d = destline + (ux >> 1);
+            while(count > 0) {
+                if(early_clocks) {
+                    early_clocks--;
+                } else {
+                    // Push out pixels.
+                    if(pixels & 0x8000) {
+                        // Only draw the pixel if the sprite has a color, i.e.
+                        // is not transparent. We still need to work on coincidence.
+                        if(color) {
+                            if(ux & 1)
+                                *d = (*d & 0xF0) | color;
+                            else    
+                                *d = (*d & 0xF) | (color << 4);
+                        }
+                    }
+                    if(ux & 1)
+                        d++;
+                    ux++;
+                }
+                pixels <<= 1;
+                count--;
+            }
+        }
+        // printf("sprites %d exit\n", y);
+    }
+
     void scanline(int y) {
         // Render one scanline from framebuf to ti_rendered.
         name_table_addr = (regs[2] & 0xF) << 10;
@@ -194,6 +283,7 @@ struct tms9918_t {
             }
             name_table_addr++;
         }
+        sprites(y, ti_rendered + (y << 7));
         if(y == 191) {
             // Generate interrupt at the end of the last scanline.
             status |= 0x80;
@@ -761,7 +851,15 @@ void render(uint32_t time) {
             show_pixel_RGB(screen.data + screen.row_stride*40);
             show_pixel_RGB(screen.data + screen.row_stride*40+3);
         }
+
         screen.pen = Pen(0,0,0);
+        // on first execution of this code path clear the screen
+        static bool clear_needed = true;
+        if(clear_needed) {
+            clear_needed = false;
+            screen.clear();
+        }
+
         screen.rectangle(Rect(0,220,320,20));
         screen.pen = Pen(255,255,255);
         uint32_t draw_end = now_us();
@@ -827,12 +925,38 @@ void update(uint32_t time) {
     static bool disasm = false;
     static int vdp_ints = 0;
 
-    if(buttons.pressed & Button::A) {
+    /* if(buttons.pressed & Button::A) {
         // Advance to next color.
         if(++full_screen_color >= 16)
             full_screen_color = 0;
         fill_full_screen = true;
+    } */
+
+    // Joystick
+    cpu.keyboard[6] |= 0x1F;                 // Assume all joystick buttons not pressed
+    if(buttons & Button::A)
+        cpu.keyboard[6] &= ~1;               // fire pressed
+    if(buttons & Button::DPAD_LEFT)
+        cpu.keyboard[6] &= ~2; 
+    if(buttons & Button::DPAD_RIGHT)
+        cpu.keyboard[6] &= ~4; 
+    if(buttons & Button::DPAD_DOWN)
+        cpu.keyboard[6] &= ~8; 
+    if(buttons & Button::DPAD_UP)
+        cpu.keyboard[6] &= ~16; 
+    
+    // QUIT
+    cpu.keyboard[0] |= 0x11;    // FCTN and = not pressed
+    if((buttons & Button::DPAD_UP) && (buttons & Button::Y))    // DPAD UP and Y pressed?
+        cpu.keyboard[0] &= ~0x11;   // yes FCTN and = both pressed
+    // BACK
+    cpu.keyboard[1] |= (1 << 3);    // 9 not pressed (FCTN set above)
+    if((buttons & Button::DPAD_DOWN) && (buttons & Button::Y)) {
+        cpu.keyboard[1] &= ~(1 << 3);   // 9 pressed
+        cpu.keyboard[0] &= ~0x10;       // FCTN pressed
     }
+
+#if 0        
     if(buttons.pressed & Button::B) {
         fill_full_screen = false;
 #ifdef DEBUG_PRINT          
@@ -852,6 +976,8 @@ void update(uint32_t time) {
         debug_show_pixel = true;
 */        
     }
+#endif
+
     if(buttons.pressed & Button::X) {
         // cpu.reset();
         if(cpu.stuck) {
@@ -864,7 +990,7 @@ void update(uint32_t time) {
         int loops = 5000;
         while(!cpu.stuck && loops > 0) {
             char s[80];
-            int t = cpu.dasm_instruction(s, cpu.pc);
+            /* int t = */ cpu.dasm_instruction(s, cpu.pc);
             printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
             cpu.step();
             loops--;
@@ -914,7 +1040,7 @@ void update(uint32_t time) {
             cpu.step();
             if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
                 // VDP interrupt
-                uint16_t cst = cpu.st;
+                // uint16_t cst = cpu.st;
                 bool b = cpu.interrupt(1);
                 if(b) {
                     // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
@@ -960,8 +1086,9 @@ void update(uint32_t time) {
             debug_log = fopen("debug.txt", "wt");
         }
 */        
-    } else
-        cpu.keyboard[5] |= (1 << 4);   // '1' up
+    } else {
+        cpu.keyboard[5] |= (1 << 4);    // '1' up
+    }
 
     if(buttons & Button::DPAD_RIGHT) {
         cpu.keyboard[1] &= ~(1 << 4);   // '2' down
@@ -972,6 +1099,15 @@ void update(uint32_t time) {
         printf("TMS9901 CRU 0x%08X VDP pending %d VDP ints %d\n",
             cpu.tms9901_cru, tms9918.interrupt_pending(), vdp_ints
         );
+        if(cpu.stuck) {
+                char s[80];
+                cpu.dasm_instruction(s, cpu.prev_pc);
+                printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+                    grom.get_read_addr(), 
+                    grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+                    tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+        }
     }
 }
 

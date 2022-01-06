@@ -353,7 +353,7 @@ void tms9900_t::do_exec0() {
 
     switch((ir >> 6) & 0xF) {
       case  0:                                      // BLWP
-        stuck = true;
+        do_blwp(sa);
         return;
       case  1: pc = sa; return;                     // B
       case  2: {                                    // X
