@@ -26,7 +26,29 @@ uint8_t full_screen_color = 0;
 bool fill_full_screen = true;
 bool debug_show_pixel = false;
 
+uint32_t time_scanlines = 0;
 FILE *debug_log = nullptr;
+
+template<class X> struct averager_t {
+    X values[8];
+    int index;
+    averager_t() {
+        for(int i=0; i<8; i++)
+            values[i] = 0;
+        index = 0;
+    }
+    void new_value(X v) {
+        values[index] = v;
+        index = (index + 1) & 7;
+    }
+    X average() {
+        X sum = 0 ;
+        for(int i=0; i<8; i++)
+            sum += values[i];
+        return sum / 8;
+    }
+
+};
 
 // #define DEBUG_PRINT
 
@@ -63,8 +85,16 @@ struct tms9918_t {
     unsigned    vram_writes;    //!< debug counter
     unsigned    reg_writes;     //!< debug counter
     uint8_t     status;
+
+    uint16_t    palette_rgb565[16];
+    uint8_t     palette_rgb888[16*4];
+
     tms9918_t() {
         memset(regs,0,sizeof(regs));
+        for(int i=0; i<16; i++) {
+            palette_rgb565[i] = unpack_rgb565(i);
+            unpack_rgb888(palette_rgb888 + i*4, i);
+        }
     }
     void init() {
         /*
@@ -88,6 +118,24 @@ struct tms9918_t {
         status = 0;
         reg_writes = 0;
     }     
+
+    uint16_t unpack_rgb565(uint8_t c) {
+        uint16_t k = palette_lookup[c & 0xF];
+        // SRC:   RRR    GGG    BB
+        // DST: BBBBB GGGGGG RRRRR (32blit on picosystem)
+        uint16_t r = (k & 0xE0) >> 2;   // 5 bits of red
+        uint16_t g = (k & 0x1C) << 1;   // 6 bits of green
+        uint16_t b = (k & 3) << 3;      // 5 bits of blue
+        return r | (g << 5) | (b << 11);
+    }
+    
+    void unpack_rgb888(uint8_t *d, uint8_t c) {
+        uint32_t k = palette_lookup[c & 0xF];
+        d[0] = (k & 0xE0);        // R
+        d[1] = ((k & 0x1C) << 3); // G
+        d[2] = ((k & 3) << 6);    // B        
+    }
+
     void scanline(int y) {
         // Render one scanline from framebuf to ti_rendered.
         name_table_addr = (regs[2] & 0xF) << 10;
@@ -151,8 +199,9 @@ struct tms9918_t {
             status |= 0x80;
         }
     }
-    void render(int yoffset) {
+    uint32_t render(int yoffset) {
         // Now render from ti_rendered to our framebuffer.
+        uint32_t start = now_us();
         // My selfmade renderer. Center the image on the screen.
         int w = screen.bounds.w;
         int x_src_offset = 0;
@@ -192,20 +241,22 @@ struct tms9918_t {
                 uint8_t *d = screen.data + (yoffset+y)*screen.row_stride+3*x_dest_offset;
                 for(int x=0; x<128; x++) {
                     // Two pixels per loop here.
-                    uint32_t k = palette_lookup[*p >> 4];
-                    d[0] = (k & 0xE0);  // R
-                    d[1] = ((k & 0x1C) << 3); // G
-                    d[2] = ((k & 3) << 6);    // B
-                    k = palette_lookup[*p & 0xF];
-                    d[3] = (k & 0xE0);  
-                    d[4] = ((k & 0x1C) << 3);
-                    d[5] = ((k & 3) << 6);
+                    uint32_t px = *p >> 4;
+                    d[0] = palette_rgb888[px << 2];                    
+                    d[1] = palette_rgb888[(px << 2) + 1];
+                    d[2] = palette_rgb888[(px << 2) + 2];
+                    px = *p & 0xF;
+                    d[3] = palette_rgb888[px << 2];                    
+                    d[4] = palette_rgb888[(px << 2) + 1];
+                    d[5] = palette_rgb888[(px << 2) + 2];
                     d += 6;
                     p++;
                 }
             }
 
         }    
+        uint32_t end = now_us();
+        return us_diff(start, end);
     }
     /**
      * @brief CPU write to VDP. 
@@ -667,9 +718,10 @@ void init() {
 // amount if milliseconds elapsed since the start of your game
 //
 void render(uint32_t time) {
+    uint32_t draw_start = now_us();
 
     // clear the screen -- screen is a reference to the frame buffer and can be used to draw all things with the 32blit
-    screen.clear();
+    // screen.clear();
 
     // draw some text at the top of the screen
     screen.alpha = 255;
@@ -703,12 +755,27 @@ void render(uint32_t time) {
             " row: "+ std::to_string(screen.row_stride),
             minimal_font, Point(5,30));    
     } else {
-        tms9918.render(15);
+        uint32_t t = tms9918.render(15);
         if(debug_show_pixel) {
             debug_show_pixel = false;
             show_pixel_RGB(screen.data + screen.row_stride*40);
             show_pixel_RGB(screen.data + screen.row_stride*40+3);
         }
+        screen.pen = Pen(0,0,0);
+        screen.rectangle(Rect(0,220,320,20));
+        screen.pen = Pen(255,255,255);
+        uint32_t draw_end = now_us();
+
+        static averager_t<uint32_t> t9918;
+        static averager_t<uint32_t> trender;
+        static averager_t<uint32_t> tscanlines;
+        t9918.new_value(t);
+        trender.new_value(us_diff(draw_start, draw_end));
+        tscanlines.new_value(time_scanlines);
+
+        screen.text("9918: " + std::to_string(t9918.average()), minimal_font, Point(5, 220));
+        screen.text("render: " + std::to_string(trender.average()), minimal_font, Point(160, 220));
+        screen.text("scanlns:" + std::to_string(tscanlines.average()), minimal_font, Point(80,220));
 
     }
 
@@ -806,7 +873,7 @@ void update(uint32_t time) {
     }
 
     if(!cpu.stuck && 1) {
-        for(int i=0; i<5000 && !cpu.stuck; i++) {
+        for(int i=0; i<2000 && !cpu.stuck; i++) {
 #ifdef VERIFY
             uint16_t a = tursi_cpu.GetPC();
             run_verify_step(false);
@@ -877,8 +944,10 @@ void update(uint32_t time) {
         }
         if(!cpu.stuck) {
             fill_full_screen = false;
+            uint32_t start = now_us();
             for(int y=0; y<192; y++)
                 tms9918.scanline(y);    
+            time_scanlines = us_diff(start, now_us());
         }
     }
 
