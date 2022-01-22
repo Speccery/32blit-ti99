@@ -790,6 +790,17 @@ void show_pixel_RGB(uint8_t *p) {
 #endif
 }
 
+uint32_t last_render_second=0; // timestamp of last full second
+uint32_t last_render_cycles=0; // cycles at last time stamp
+float    MHz = 3.0f;    // last computed megahertz
+float    fps = 10.0f;   // last computed fps
+float    vdp_draws = 0;
+uint32_t last_render_frames=0;
+uint32_t render_frames=0;
+uint32_t last_update_time = 0;
+uint32_t last_update_tms9918_run_cycles = 0;    // Last CPU cycles we did run the VDP
+uint32_t drawn_frames = 0;
+uint32_t last_drawn_frames = 0;
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -803,6 +814,16 @@ void init() {
     printf("About to enter cpu.reset()\n");
     cpu.reset();
     printf("Completed cpu.reset()\n");
+
+    last_render_second = 0;
+    last_render_cycles = 0;
+    last_render_frames = 0;
+    render_frames = 0;
+    last_update_time = 0;
+    last_update_tms9918_run_cycles = 0;
+    drawn_frames = 0;
+    last_drawn_frames = 0;
+    
 
 #ifdef VERIFY
     printf("About to enter tursi_cpu.reset()\n");   
@@ -818,13 +839,6 @@ void init() {
 // This function is called to perform rendering of the game. time is the 
 // amount if milliseconds elapsed since the start of your game
 //
-uint32_t last_render_second=0; // timestamp of last full second
-uint32_t last_render_cycles=0; // cycles at last time stamp
-float    MHz = 3.0f;    // last computed megahertz
-float    fps = 10.0f;   // last computed fps
-uint32_t last_render_frames=0;
-uint32_t render_frames=0;
-
 void render(uint32_t time) {
     uint32_t draw_start = now_us();
     render_frames++;
@@ -842,7 +856,8 @@ void render(uint32_t time) {
     sprintf(s, "%04X ", cpu.get_pc());
     screen.text("TI-99/4A " + std::string(s) + " " + std::to_string(cpu.get_instructions()) + " " + (cpu.is_stuck() ? "STUCK" : ""),
          minimal_font, Point(5, 4));
-    screen.text(std::to_string(fps), minimal_font, Point(200,4));
+    screen.text(std::to_string((int)(fps+0.5f)), minimal_font, Point(200,4));
+    screen.text(std::to_string((int)(vdp_draws+0.5f)), minimal_font, Point(220, 4));
 
     if(fill_full_screen) {
         // Fill the whole screen with one of TI's colors
@@ -897,7 +912,9 @@ void render(uint32_t time) {
         if(time - last_render_second >= 1000) {
             MHz = (cpu.get_cycles() - last_render_cycles) / ((time - last_render_second) * 1000.0f);
             fps = 1000.0f*(render_frames - last_render_frames) / (time - last_render_second);
+            vdp_draws = 1000.0f*(drawn_frames - last_drawn_frames) / (time - last_render_second);
             last_render_frames = render_frames;
+            last_drawn_frames = drawn_frames;
             last_render_second = time;
             last_render_cycles = cpu.get_cycles();
         }
@@ -952,9 +969,6 @@ void run_verify_step(bool verbose=true) {
 void update(uint32_t time) {
     static bool disasm = false;
     static int vdp_ints = 0;
-
-    static uint32_t last_time = 0;
-    static uint32_t last_tms9918_run_cycles = 0;    // Last CPU cycles we did run the VDP
 
     /* if(buttons.pressed & Button::A) {
         // Advance to next color.
@@ -1030,8 +1044,8 @@ void update(uint32_t time) {
     }
 
     if(!cpu.is_stuck() && 1) {
-        uint32_t cycles_to_run = (time - last_time)*3000;   // 3000 = 3.0MHz
-        last_time = time;
+        uint32_t cycles_to_run = (time - last_update_time)*3000;   // 3000 = 3.0MHz
+        last_update_time = time;
         unsigned long start_cycles = cpu.get_cycles();
         int i=0;
         while(cpu.get_cycles() - start_cycles < cycles_to_run && !cpu.is_stuck()) { 
@@ -1077,13 +1091,14 @@ void update(uint32_t time) {
             cpu.step();
             if(!(i & 0xF) && !cpu.is_stuck()) { // Run this every 16 instructions
                 // We run at 50 fps
-                if(cpu.get_cycles() >= last_tms9918_run_cycles + 3000000/50) {
-                    last_tms9918_run_cycles = cpu.get_cycles();
+                if(cpu.get_cycles() >= last_update_tms9918_run_cycles + 3000000/50) {
+                    last_update_tms9918_run_cycles = cpu.get_cycles();
                     fill_full_screen = false;
                     uint32_t start = now_us();
                     for(int y=0; y<192; y++)
                         tms9918.scanline(y);    
                     time_scanlines = us_diff(start, now_us());
+                    drawn_frames++;
                 }                
                 if (tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
                     // VDP interrupt
