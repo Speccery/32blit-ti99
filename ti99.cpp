@@ -631,7 +631,7 @@ protected:
 
     void show_cpu() {
         printf("%6ld PC:%04X ST:%04X WP:%04X GROM:%04X %02X (%04X) ", 
-            inst_count,
+            get_instructions(),
             prev_pc, st, wp, grom.get_read_addr(),
             grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
             (scratchpad[0x72] << 8) | scratchpad[0x73]
@@ -656,24 +656,30 @@ protected:
              // No DSR memory for now.
              dsr_mem_counter++;
              read_value =  0;
+             add_ext_cycles(4);
          } else if(addr >= 0x6000 && addr < 0x8000) {
              // Cartridge access 
              read_value = (rominvaders_data[addr - 0x6000] << 8) 
                         |  rominvaders_data[addr - 0x6000+1];
              cart_counter++;
+             add_ext_cycles(4);
          } else if(addr >= 0x8300 && addr <0x8400) {
              read_value =  (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
          } else if(addr >= 0x8400 && addr< 0x8800) {
              // sound chip access
+             add_ext_cycles(4);
          } else if(addr >= 0x8800 && addr< 0x8C00) {
              // VDP read.
              uint16_t r = tms9918.read(!!(addr & 2));
              read_value =  r << 8; 
+             add_ext_cycles(4);
          } else if(addr >= 0x8C00 && addr< 0x9000) {
              // VDP write port
+             add_ext_cycles(4);
          } else if(addr >= 0x9000 && addr < 0x9800) {
              // speech synthesizer
              read_value =  0xAC00;
+             add_ext_cycles(4);
          } else if(addr >= 0x9800 && addr < 0xA000) {
              // GROM reads. 9800..9BFF is the actual read area.
              // 9C00..9FFF is write port, but read due to read-modify-write architecture.
@@ -681,6 +687,7 @@ protected:
                 read_value =  grom.read(addr) << 8;
             else
                 read_value =  0xAB00;  // dummy
+            add_ext_cycles(4);
          } /* else if(addr >= 0xBD04 && addr< 0xBD08) {
              show_cpu();
              printf("mystery read from 0x%04X\n", addr);
@@ -710,18 +717,22 @@ protected:
              scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
          } else if(addr >= 0x8400 && addr < 0x8800) {
              // sound chip access
+             add_ext_cycles(4);
          } else if(addr >= 0x8C00 && addr < 0x9000) {
-             // VDP write
-             tms9918.write(!!(addr & 2), data >> 8);
-             // static int count = 15;
-             // if(--count == 0)
-             //    stuck = true;
+            // VDP write
+            tms9918.write(!!(addr & 2), data >> 8);
+            // static int count = 15;
+            // if(--count == 0)
+            //    stuck = true;
+            add_ext_cycles(4);
          } else if (addr >= 0x9c00 && addr < 0xA000) {
-             grom.write(addr, data >> 8);
-             if(grom.should_cpu_stat_be_shown())
-                show_cpu();
+            grom.write(addr, data >> 8);
+            if(grom.should_cpu_stat_be_shown())
+               show_cpu();
+            add_ext_cycles(4);
          } else if(addr >= 0x9400 && addr < 0x9800) {
              // Speech write, do nothing.
+             add_ext_cycles(4);
          } else {
              stuck = true;
              printf("writing outside of memory: 0x%04X\n", addr);
@@ -807,8 +818,16 @@ void init() {
 // This function is called to perform rendering of the game. time is the 
 // amount if milliseconds elapsed since the start of your game
 //
+uint32_t last_render_second=0; // timestamp of last full second
+uint32_t last_render_cycles=0; // cycles at last time stamp
+float    MHz = 3.0f;    // last computed megahertz
+float    fps = 10.0f;   // last computed fps
+uint32_t last_render_frames=0;
+uint32_t render_frames=0;
+
 void render(uint32_t time) {
     uint32_t draw_start = now_us();
+    render_frames++;
 
     // clear the screen -- screen is a reference to the frame buffer and can be used to draw all things with the 32blit
     // screen.clear();
@@ -820,9 +839,10 @@ void render(uint32_t time) {
     screen.rectangle(Rect(0, 0, 320, 14));
     screen.pen = Pen(0, 0, 0);
     char s[10];
-    sprintf(s, "%04X ", cpu.pc);
-    screen.text("TI-99/4A " + std::string(s) + " " + std::to_string(cpu.inst_count) + " " + (cpu.stuck ? "STUCK" : ""),
+    sprintf(s, "%04X ", cpu.get_pc());
+    screen.text("TI-99/4A " + std::string(s) + " " + std::to_string(cpu.get_instructions()) + " " + (cpu.is_stuck() ? "STUCK" : ""),
          minimal_font, Point(5, 4));
+    screen.text(std::to_string(fps), minimal_font, Point(200,4));
 
     if(fill_full_screen) {
         // Fill the whole screen with one of TI's colors
@@ -872,8 +892,16 @@ void render(uint32_t time) {
         tscanlines.new_value(time_scanlines);
 
         screen.text("9918: " + std::to_string(t9918.average()), minimal_font, Point(5, 220));
-        screen.text("render: " + std::to_string(trender.average()), minimal_font, Point(160, 220));
-        screen.text("scanlns:" + std::to_string(tscanlines.average()), minimal_font, Point(80,220));
+        screen.text("render: " + std::to_string(trender.average()), minimal_font, Point(110, 220));
+        screen.text("lines:" + std::to_string(tscanlines.average()), minimal_font, Point(55,220));
+        if(time - last_render_second >= 1000) {
+            MHz = (cpu.get_cycles() - last_render_cycles) / ((time - last_render_second) * 1000.0f);
+            fps = 1000.0f*(render_frames - last_render_frames) / (time - last_render_second);
+            last_render_frames = render_frames;
+            last_render_second = time;
+            last_render_cycles = cpu.get_cycles();
+        }
+        screen.text("MHz: " + std::to_string(MHz), minimal_font, Point(170, 220));
 
     }
 
@@ -883,7 +911,7 @@ void render(uint32_t time) {
 void run_verify_step(bool verbose=true) {
     // First run Tursi's CPU, then mine and compare output.
     uint16_t tpc = tursi_cpu.GetPC();
-    uint16_t mpc = cpu.pc;
+    uint16_t mpc = cpu.get_pc();
     if(verbose) {
         char s[80];
         cpu.dasm_instruction(s, tursi_cpu.GetPC());
@@ -899,13 +927,13 @@ void run_verify_step(bool verbose=true) {
     cpu.step();
     cpu.verify_end();
     // printf("Verify ended.\n");
-    if(tursi_cpu.GetST() != cpu.st || tursi_cpu.GetPC() != cpu.pc || tursi_cpu.GetWP() != cpu.wp) {
-        cpu.stuck = true;
+    if(tursi_cpu.GetST() != cpu.st || tursi_cpu.GetPC() != cpu.get_pc() || tursi_cpu.GetWP() != cpu.wp) {
+        cpu.is_stuck() = true;
         char s[80];
         cpu.dasm_instruction(s, tpc);
         printf("%d %04X %s\n", tursi_cpu.GetCycleCount(), tpc, s);
         printf("ST Tursi %04X my %04X\n", tursi_cpu.GetST(), cpu.st);
-        printf("PC Tursi %04X me %04X\n", tursi_cpu.GetPC(), cpu.pc);
+        printf("PC Tursi %04X me %04X\n", tursi_cpu.GetPC(), cpu.get_pc());
         printf("WP Tursi %04X me %04X\n", tursi_cpu.GetWP(), cpu.wp);
         printf("old PC Tursi %04X me %04X\n", tpc, mpc);
         cpu.verify_show_rd_buffer();
@@ -924,6 +952,9 @@ void run_verify_step(bool verbose=true) {
 void update(uint32_t time) {
     static bool disasm = false;
     static int vdp_ints = 0;
+
+    static uint32_t last_time = 0;
+    static uint32_t last_tms9918_run_cycles = 0;    // Last CPU cycles we did run the VDP
 
     /* if(buttons.pressed & Button::A) {
         // Advance to next color.
@@ -980,7 +1011,7 @@ void update(uint32_t time) {
 
     if(buttons.pressed & Button::X) {
         // cpu.reset();
-        if(cpu.stuck) {
+        if(cpu.is_stuck()) {
             printf("CPU Stuck\n");
             return;
         }
@@ -988,22 +1019,28 @@ void update(uint32_t time) {
         run_verify_step();
 #else
         int loops = 5000;
-        while(!cpu.stuck && loops > 0) {
+        while(!cpu.is_stuck() && loops > 0) {
             char s[80];
-            /* int t = */ cpu.dasm_instruction(s, cpu.pc);
-            printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+            /* int t = */ cpu.dasm_instruction(s, cpu.get_pc());
+            printf("%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
             cpu.step();
             loops--;
         }
 #endif        
     }
 
-    if(!cpu.stuck && 1) {
-        for(int i=0; i<2000 && !cpu.stuck; i++) {
+    if(!cpu.is_stuck() && 1) {
+        uint32_t cycles_to_run = (time - last_time)*3000;   // 3000 = 3.0MHz
+        last_time = time;
+        unsigned long start_cycles = cpu.get_cycles();
+        int i=0;
+        while(cpu.get_cycles() - start_cycles < cycles_to_run && !cpu.is_stuck()) { 
+            i++;
+        // for(int i=0; i<2000 && !cpu.is_stuck(); i++) {
 #ifdef VERIFY
             uint16_t a = tursi_cpu.GetPC();
             run_verify_step(false);
-            if(cpu.stuck) {
+            if(cpu.is_stuck()) {
                 char s[80];
                 cpu.dasm_instruction(s, a);
                 printf("STUCK %d %04X %s\n", tursi_cpu.GetCycleCount(), tursi_cpu.GetPC(), s);
@@ -1011,7 +1048,7 @@ void update(uint32_t time) {
 
             // Check interrupt status every 16 instructions
             if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
-                // printf("Interrupt stuff begin %ld.\n", cpu.inst_count);
+                // printf("Interrupt stuff begin %ld.\n", cpu.get_instructions());
                 uint16_t cst = cpu.st;
                 cpu.verify_begin();
                 // BUGBUG CRU masking not done yet.
@@ -1029,36 +1066,47 @@ void update(uint32_t time) {
 #else
             if(disasm) {
                 char s[80];
-                cpu.dasm_instruction(s, cpu.prev_pc);
-                printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                cpu.dasm_instruction(s, cpu.get_previous_pc());
+                printf("%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
                 if(debug_log) {
-                    fprintf(debug_log, "%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                    fprintf(debug_log, "%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
                     fflush(debug_log);
                 }
             }
 
             cpu.step();
-            if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
-                // VDP interrupt
-                // uint16_t cst = cpu.st;
-                bool b = cpu.interrupt(1);
-                if(b) {
-                    // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
-                    vdp_ints++;
+            if(!(i & 0xF) && !cpu.is_stuck()) { // Run this every 16 instructions
+                // We run at 50 fps
+                if(cpu.get_cycles() >= last_tms9918_run_cycles + 3000000/50) {
+                    last_tms9918_run_cycles = cpu.get_cycles();
+                    fill_full_screen = false;
+                    uint32_t start = now_us();
+                    for(int y=0; y<192; y++)
+                        tms9918.scanline(y);    
+                    time_scanlines = us_diff(start, now_us());
+                }                
+                if (tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
+                    // VDP interrupt
+                    // uint16_t cst = cpu.st;
+                    bool b = cpu.interrupt(1);
+                    if(b) {
+                        // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
+                        vdp_ints++;
+                    }
                 }
             }
-            if(cpu.stuck) {
+            if(cpu.is_stuck()) {
                 // oh no, we became stuck!
                 char s[80];
-                cpu.dasm_instruction(s, cpu.prev_pc);
-                printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                cpu.dasm_instruction(s, cpu.get_previous_pc());
+                printf("%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
                 printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
                     grom.get_read_addr(), 
                     grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
                     tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
                 if(debug_log) {
                     fprintf(debug_log, "CPU STUCK\n");
-                    fprintf(debug_log, "%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                    fprintf(debug_log, "%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
                     fprintf(debug_log, "GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
                         grom.get_read_addr(), 
                         grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
@@ -1068,13 +1116,7 @@ void update(uint32_t time) {
             }
 #endif
         }
-        if(!cpu.stuck) {
-            fill_full_screen = false;
-            uint32_t start = now_us();
-            for(int y=0; y<192; y++)
-                tms9918.scanline(y);    
-            time_scanlines = us_diff(start, now_us());
-        }
+
     }
 
     if(buttons & Button::DPAD_LEFT) {
@@ -1082,7 +1124,7 @@ void update(uint32_t time) {
 /*        
         if(!disasm) {
             disasm = true;
-            cpu.inst_count = 0;
+            cpu.get_instructions() = 0;
             debug_log = fopen("debug.txt", "wt");
         }
 */        
@@ -1099,10 +1141,10 @@ void update(uint32_t time) {
         printf("TMS9901 CRU 0x%08X VDP pending %d VDP ints %d\n",
             cpu.tms9901_cru, tms9918.interrupt_pending(), vdp_ints
         );
-        if(cpu.stuck) {
+        if(cpu.is_stuck()) {
                 char s[80];
-                cpu.dasm_instruction(s, cpu.prev_pc);
-                printf("%ld %04X %s\n", cpu.inst_count, cpu.pc, s);
+                cpu.dasm_instruction(s, cpu.get_previous_pc());
+                printf("%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
                 printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
                     grom.get_read_addr(), 
                     grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,

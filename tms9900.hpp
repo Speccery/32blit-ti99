@@ -24,18 +24,22 @@ struct instrucion_t {
 };
 
 class tms9900_t {
-  public:
+  private:
+    unsigned long cycles;
+    unsigned long inst_count;
+    unsigned long wait_cycles;
+  protected:
     uint16_t wp;  //!< workspace pointer
     uint16_t st;  //!< status register
     uint16_t pc;  //!< program counter
     uint16_t ir;  //!< Current instruction.
     uint16_t prev_pc; //!< pc at the start of this instruction cycle.
-    unsigned long cycles;
-    unsigned long inst_count;
     bool stuck;
+  public:
     tms9900_t() {
       cycles = 0;
       inst_count = 0;
+      wait_cycles = 0;
       stuck = false;
     }
     virtual ~tms9900_t() {}
@@ -44,8 +48,21 @@ class tms9900_t {
     bool execute();   //!< execute an instruction in IR after fetch.
     int dasm_instruction(char *dst, uint16_t addr);
     bool interrupt(uint8_t level);
+    unsigned long get_cycles() const;
+    unsigned long get_instructions() const;
+    void add_ext_cycles(unsigned u) {   //!< Public function to add cycles. External interface enables computation of wait states.
+      cycles += u;
+      wait_cycles += u;
+    }
+    uint16_t get_pc() const { return pc; }
+    uint16_t get_previous_pc() const { return prev_pc; }
+    bool is_stuck() const   { return stuck; }
   protected:
+    void add_cycles(int n) {
+      cycles += n;
+    }
     void do_exec0();
+    void do_jump(bool condition, uint16_t offset);
     void do_exec1();
     void do_exec2();
     void do_exec3();
