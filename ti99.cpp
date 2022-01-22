@@ -18,34 +18,53 @@ extern "C" unsigned char vdptest_data[];
 
 using namespace blit;
 
+// TI Font.
+uint8_t ti_font_data[96][8];
+
+static  uint8_t ti_font_width[96] = {
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8,
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8
+};
+
+const Font ti_font(&ti_font_data[0][0], ti_font_width, 8, 8);
+
+#define TI_CPU_CLK (3000000)
+uint32_t cpu_clk = TI_CPU_CLK;
+
 // Our 256*192 framebuffer of 4 bits per pixels TMS9918 pixels.
 #define TI_WIDTH 256
 #define TI_HEIGHT 192
+
 uint8_t ti_rendered[TI_WIDTH/2*TI_HEIGHT];
 uint8_t full_screen_color = 0;
 bool fill_full_screen = true;
 bool debug_show_pixel = false;
 
 uint32_t time_scanlines = 0;
+uint32_t time_cpu = 0;      // time taken by CPU cycles between TMS9918 scanlines through the screen
 FILE *debug_log = nullptr;
 
 template<class X> struct averager_t {
-    X values[8];
+    X values[16];
     int index;
     averager_t() {
-        for(int i=0; i<8; i++)
+        for(int i=0; i<16; i++)
             values[i] = 0;
         index = 0;
     }
     void new_value(X v) {
         values[index] = v;
-        index = (index + 1) & 7;
+        index = (index + 1) & 15;
     }
     X average() {
         X sum = 0 ;
-        for(int i=0; i<8; i++)
+        for(int i=0; i<16; i++)
             sum += values[i];
-        return sum / 8;
+        return sum / 16;
     }
 
 };
@@ -160,8 +179,10 @@ struct tms9918_t {
                     yys[active_sprites] = sprite_line_check;
                     ++ active_sprites;
             }
-            if(active_sprites == 5)
+            if(active_sprites == 5) {
                 sig_5th_pending = true;
+                break;  // only draw max 5 sprites (already 1 too many)
+            }
         }
         // printf("active_sprites %d\n", active_sprites);
         // Draw sprites in the array sprites_to_draw.
@@ -274,12 +295,19 @@ struct tms9918_t {
             if((unsigned long)(p - ti_rendered) > sizeof(ti_rendered)) {
                 printf("overflow %ld y=%d\n", p-ti_rendered, y);
             }
-#endif            
-            for(int n=0; n<cell_width; n += 2) {
-                uint8_t px = (pattern & 0x80 ? color1 : color0) << 4;
-                px |= pattern & 0x40 ? color1 : color0;
-                *p++ = px;
-                pattern <<= 2;
+#endif          
+            if(cell_width == 8) {
+                p[0] = ((pattern & 0x80 ? color1 : color0) << 4) | (pattern & 0x40 ? color1 : color0);
+                p[1] = ((pattern & 0x20 ? color1 : color0) << 4) | (pattern & 0x10 ? color1 : color0);
+                p[2] = ((pattern & 0x08 ? color1 : color0) << 4) | (pattern & 0x04 ? color1 : color0);
+                p[3] = ((pattern & 0x02 ? color1 : color0) << 4) | (pattern & 0x01 ? color1 : color0);
+                p += 4;
+            } else {
+                // cell width is 6, text mode.
+                p[0] = ((pattern & 0x80 ? color1 : color0) << 4) | (pattern & 0x40 ? color1 : color0);
+                p[1] = ((pattern & 0x20 ? color1 : color0) << 4) | (pattern & 0x10 ? color1 : color0);
+                p[2] = ((pattern & 0x08 ? color1 : color0) << 4) | (pattern & 0x04 ? color1 : color0);
+                p += 3;
             }
             name_table_addr++;
         }
@@ -308,18 +336,8 @@ struct tms9918_t {
                 uint16_t *d = (uint16_t *)(screen.data + (yoffset+y)*screen.row_stride+x_dest_offset*2);
                 for(int x=0; x<128-x_src_offset*2; x++) {
                     // Two pixels per loop here.
-                    uint16_t k = palette_lookup[*p >> 4];
-                    // SRC:   RRR    GGG    BB
-                    // DST: BBBBB GGGGGG RRRRR (32blit on picosystem)
-                    uint16_t r = (k & 0xE0) >> 2;   // 5 bits of red
-                    uint16_t g = (k & 0x1C) << 1;   // 6 bits of green
-                    uint16_t b = (k & 3) << 3;      // 5 bits of blue
-                    d[0] = r | (g << 5) | (b << 11);
-                    k = palette_lookup[*p & 0xF];
-                    r = (k & 0xE0) >> 2;   // 5 bits of red
-                    g = (k & 0x1C) << 1;   // 6 bits of green
-                    b = (k & 3) << 3;      // 5 bits of blue
-                    d[1] = r | (g << 5) | (b << 11);
+                    d[0] = palette_rgb565[*p >> 4];
+                    d[1] = palette_rgb565[*p & 0xF];
                     d += 2;
                     p++;
                 }
@@ -792,7 +810,7 @@ void show_pixel_RGB(uint8_t *p) {
 
 uint32_t last_render_second=0; // timestamp of last full second
 uint32_t last_render_cycles=0; // cycles at last time stamp
-float    MHz = 3.0f;    // last computed megahertz
+int      kHz = 3000;    // last computed kilohertz
 float    fps = 10.0f;   // last computed fps
 float    vdp_draws = 0;
 uint32_t last_render_frames=0;
@@ -823,6 +841,31 @@ void init() {
     last_update_tms9918_run_cycles = 0;
     drawn_frames = 0;
     last_drawn_frames = 0;
+
+    // Copy TI font data over from GROM.
+    for(int ch=0; ch<96; ch++) {
+        uint8_t *p = ti_font_data[ch];
+        // The 32blit seems to store data vertically, i.e. exclamation mark is 0x2E and that's it.
+        // It also seems to be upside down, i.e. LSB is the topmost bit.
+        // Thus we need to here rotate the content.
+        for(int j=0; j<8; j++) {
+            uint8_t bits = 0;
+            // TI font data is only 7 pixel high.
+            for(int y=0; y<7; y++) {
+                bits |= grom994a_data[0x6B4+ch*7+(6-y)] & (1 << (7-j)) ? 0x80 >> y : 0; 
+            }
+            p[j] = bits;
+        }
+    }
+    // Make the TI font somewhat proportional.
+    ti_font_width[0] = 3;   // Space is 3 pixels
+    ti_font_width[':'-32] = 4;  // Colon is 4 pixels
+    for(int i='0'; i<= '9'; i++)        // Make numbers 6 pixels wide
+        ti_font_width[i-32] = 6;
+    for(int i='A'; i<= 'Z'; i++) {   // Make A to Z 6 pixels wide
+        ti_font_width[i-32] = 6;
+        ti_font_width[i-32+'a'-'A'] = 6;
+    }
     
 
 #ifdef VERIFY
@@ -854,10 +897,9 @@ void render(uint32_t time) {
     screen.pen = Pen(0, 0, 0);
     char s[10];
     sprintf(s, "%04X ", cpu.get_pc());
-    screen.text("TI-99/4A " + std::string(s) + " " + std::to_string(cpu.get_instructions()) + " " + (cpu.is_stuck() ? "STUCK" : ""),
-         minimal_font, Point(5, 4));
-    screen.text(std::to_string((int)(fps+0.5f)), minimal_font, Point(200,4));
-    screen.text(std::to_string((int)(vdp_draws+0.5f)), minimal_font, Point(220, 4));
+    screen.text("TI-99/4A " + std::string(s) + " " + (cpu.is_stuck() ? "STUCK" : ""), ti_font, Point(5, 4));
+    screen.text(std::to_string((int)(fps+0.5f)), ti_font, Point(200,4));
+    screen.text(std::to_string((int)(vdp_draws+0.5f)), ti_font, Point(220, 4));
 
     if(fill_full_screen) {
         // Fill the whole screen with one of TI's colors
@@ -902,15 +944,17 @@ void render(uint32_t time) {
         static averager_t<uint32_t> t9918;
         static averager_t<uint32_t> trender;
         static averager_t<uint32_t> tscanlines;
+        static averager_t<uint32_t> tcpu;
         t9918.new_value(t);
         trender.new_value(us_diff(draw_start, draw_end));
         tscanlines.new_value(time_scanlines);
+        tcpu.new_value(time_cpu);
 
-        screen.text("9918: " + std::to_string(t9918.average()), minimal_font, Point(5, 220));
-        screen.text("render: " + std::to_string(trender.average()), minimal_font, Point(110, 220));
-        screen.text("lines:" + std::to_string(tscanlines.average()), minimal_font, Point(55,220));
+        screen.text("CPU: " + std::to_string(tcpu.average()), ti_font,       Point(1, 220));
+        screen.text("Lines: " + std::to_string(tscanlines.average()), ti_font, Point(60,220));
+        screen.text("Rend: " + std::to_string(trender.average()), ti_font,   Point(128, 220));
         if(time - last_render_second >= 1000) {
-            MHz = (cpu.get_cycles() - last_render_cycles) / ((time - last_render_second) * 1000.0f);
+            kHz = (cpu.get_cycles() - last_render_cycles) / ((time - last_render_second));
             fps = 1000.0f*(render_frames - last_render_frames) / (time - last_render_second);
             vdp_draws = 1000.0f*(drawn_frames - last_drawn_frames) / (time - last_render_second);
             last_render_frames = render_frames;
@@ -918,7 +962,7 @@ void render(uint32_t time) {
             last_render_second = time;
             last_render_cycles = cpu.get_cycles();
         }
-        screen.text("MHz: " + std::to_string(MHz), minimal_font, Point(170, 220));
+        screen.text("kHz: " + std::to_string(kHz), ti_font, Point(188, 220));
 
     }
 
@@ -1001,27 +1045,11 @@ void update(uint32_t time) {
         cpu.keyboard[0] &= ~0x10;       // FCTN pressed
     }
 
-#if 0        
-    if(buttons.pressed & Button::B) {
-        fill_full_screen = false;
-#ifdef DEBUG_PRINT          
-        printf("full_screen_color %d\n", (int)full_screen_color);
-        show_pixel_RGB(screen.data + screen.row_stride*40);
-        show_pixel_RGB(screen.data + screen.row_stride*40+3);
-#endif
-        for(int y=0; y<192; y++)
-            tms9918.scanline(y);
-/*            
-        // Overwrite with the color as above.
-        int z = (full_screen_color << 4) 
-                | full_screen_color;
-        printf("z=0x%X, c=%d\n", z, full_screen_color);
-        for(int i=0; i<192*128; i++)
-            ti_rendered[i] = z;
-        debug_show_pixel = true;
-*/        
-    }
-#endif
+    // CPU clock adjustment
+    if((buttons & Button::B) && (buttons.pressed & Button::DPAD_UP))
+        cpu_clk += 500000;  // add 0.5MHz
+    if((buttons & Button::B) && (buttons.pressed & Button::DPAD_DOWN) && cpu_clk > 500000)
+        cpu_clk -= 500000;  // sub 0.5MHz
 
     if(buttons.pressed & Button::X) {
         // cpu.reset();
@@ -1044,13 +1072,13 @@ void update(uint32_t time) {
     }
 
     if(!cpu.is_stuck() && 1) {
-        uint32_t cycles_to_run = (time - last_update_time)*3000;   // 3000 = 3.0MHz
+        uint32_t cycles_to_run = (time - last_update_time)*(cpu_clk/1000);   // 3000 = 3.0MHz
         last_update_time = time;
         unsigned long start_cycles = cpu.get_cycles();
         int i=0;
+        uint32_t start_cpu = now_us();
         while(cpu.get_cycles() - start_cycles < cycles_to_run && !cpu.is_stuck()) { 
             i++;
-        // for(int i=0; i<2000 && !cpu.is_stuck(); i++) {
 #ifdef VERIFY
             uint16_t a = tursi_cpu.GetPC();
             run_verify_step(false);
@@ -1091,13 +1119,15 @@ void update(uint32_t time) {
             cpu.step();
             if(!(i & 0xF) && !cpu.is_stuck()) { // Run this every 16 instructions
                 // We run at 50 fps
-                if(cpu.get_cycles() >= last_update_tms9918_run_cycles + 3000000/50) {
+                if(cpu.get_cycles() >= last_update_tms9918_run_cycles + cpu_clk/50) {
                     last_update_tms9918_run_cycles = cpu.get_cycles();
                     fill_full_screen = false;
                     uint32_t start = now_us();
                     for(int y=0; y<192; y++)
                         tms9918.scanline(y);    
                     time_scanlines = us_diff(start, now_us());
+                    // Add the time_scanlines to start_cpu to remove the effect of scanline(..) calls from CPU time.
+                    start_cpu += time_scanlines;
                     drawn_frames++;
                 }                
                 if (tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
@@ -1131,6 +1161,7 @@ void update(uint32_t time) {
             }
 #endif
         }
+        time_cpu = now_us() - start_cpu;
 
     }
 
