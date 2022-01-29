@@ -1,6 +1,7 @@
 #include "ti99.hpp"
 #include <cstring>  // memcpy
 #include "tms9900.hpp"
+#include "tms9918.hpp"
 #include "grom.hpp"
 
 // #define VERIFY comes now from cmake
@@ -14,7 +15,6 @@ public:
 tursi_cpu_t tursi_cpu;
 #endif
 
-extern "C" unsigned char vdptest_data[];
 
 using namespace blit;
 
@@ -47,6 +47,7 @@ bool debug_show_pixel = false;
 uint32_t time_scanlines = 0;
 uint32_t time_cpu = 0;      // time taken by CPU cycles between TMS9918 scanlines through the screen
 FILE *debug_log = nullptr;
+uint32_t bench_result = 0;
 
 template<class X> struct averager_t {
     X values[16];
@@ -71,368 +72,9 @@ template<class X> struct averager_t {
 
 // #define DEBUG_PRINT
 
-// TMS9918 colors from my tms9918.v verilog code.
-// Map the 16-colors into 8-bit RGB.
-uint8_t palette_lookup[16] = {
-    // R[7:5], G[4:2], B[1:0]
-    0, // transparent
-    0, // black
-    0b00011100,
-    0b00111101,
-    0b01001011,
-    0b10010011,
-    0b11101001,
-    0b00011111,     // cyan
-    0b11101001,     // medium red
-    0b11110010,     // light red
-    0b11111000,     // dark yellow
-    0b11111010,     // light yellow
-    0b00011000,     // dark green
-    0b11110111,     // magenta
-    0b10010010,     // gray
-    0b11111111      // white
-};
 
-struct tms9918_t {
-    uint8_t regs[8];
-    uint8_t framebuf[16*1024];
-    unsigned name_table_addr;
-    uint8_t     hold_reg;
-    uint16_t    vram_addr;
-    bool        write_state;
-    unsigned    vdp_writes;     //!< debug counter
-    unsigned    vram_writes;    //!< debug counter
-    unsigned    reg_writes;     //!< debug counter
-    uint8_t     status;
 
-    uint16_t    palette_rgb565[16];
-    uint8_t     palette_rgb888[16*4];
 
-    tms9918_t() {
-        memset(regs,0,sizeof(regs));
-        for(int i=0; i<16; i++) {
-            palette_rgb565[i] = unpack_rgb565(i);
-            unpack_rgb888(palette_rgb888 + i*4, i);
-        }
-    }
-    void init() {
-        /*
-        regs[0] = 0x0;
-        regs[1] = 0xE0;
-        regs[2] = 0xF0;
-        regs[3] = 0x0E;
-        regs[4] = 0xF9;
-        regs[5] = 0x86;
-        regs[6] = 0xF8;
-        regs[7] = 0xF7;
-        */
-        memcpy(framebuf, vdptest_data, 16*1024);
-        memcpy(regs, vdptest_data+16*1024, 8 );
-        name_table_addr = regs[2] << 10;
-        hold_reg = 0;
-        write_state = false;
-        vram_addr = 0;
-        vdp_writes = 0;
-        vram_writes = 0;
-        status = 0;
-        reg_writes = 0;
-    }     
-
-    uint16_t unpack_rgb565(uint8_t c) {
-        uint16_t k = palette_lookup[c & 0xF];
-        // SRC:   RRR    GGG    BB
-        // DST: BBBBB GGGGGG RRRRR (32blit on picosystem)
-        uint16_t r = (k & 0xE0) >> 2;   // 5 bits of red
-        uint16_t g = (k & 0x1C) << 1;   // 6 bits of green
-        uint16_t b = (k & 3) << 3;      // 5 bits of blue
-        return r | (g << 5) | (b << 11);
-    }
-    
-    void unpack_rgb888(uint8_t *d, uint8_t c) {
-        uint32_t k = palette_lookup[c & 0xF];
-        d[0] = (k & 0xE0);        // R
-        d[1] = ((k & 0x1C) << 3); // G
-        d[2] = ((k & 3) << 6);    // B        
-    }
-
-    void sprites(int y, uint8_t *destline) {
-        // Check number of active sprites
-        // printf("sprites %d entry\n", y);
-        uint16_t vram_base = (regs[5] & 0x7F) << 7; // start address of sprite attributes
-        int i = 0;
-        bool sig_5th_pending = false;
-
-        uint8_t     sprites_to_draw[32];
-        uint16_t    yys[32];
-        unsigned active_sprites = 0;
-
-        for(i=0; i<32; i++) {
-            unsigned yy = framebuf[vram_base + (i << 2)];
-            if(yy == 0xD0)
-                break;
-            // sprite active on this line.
-            yy = (yy & 0xE0) == 0xE0 ? yy & 0x1F : 0x100 | yy;
-            unsigned sprite_line_check = (y | 0x100) - yy - 1;
-            if( ((regs[1] & 2) && ((sprite_line_check & ~0xF) == 0)) ||       // 16x16 sprite check
-                (!(regs[1] & 2) && ((sprite_line_check & ~0x1F) == 0))) {     // 8x8 sprite check
-                    sprites_to_draw[active_sprites] = i;
-                    yys[active_sprites] = sprite_line_check;
-                    ++ active_sprites;
-            }
-            if(active_sprites == 5) {
-                sig_5th_pending = true;
-                break;  // only draw max 5 sprites (already 1 too many)
-            }
-        }
-        // printf("active_sprites %d\n", active_sprites);
-        // Draw sprites in the array sprites_to_draw.
-        for(int i=active_sprites-1; i>=0; i--) {
-            unsigned n = sprites_to_draw[i];
-            //  if(n == 0)
-            //      printf("Drawing sprite %d vram_base=0x%04X y=%d\n", n, vram_base+(n << 2), framebuf[vram_base + (n << 2) + 0]);
-            unsigned ux = framebuf[vram_base + (n << 2) + 1];
-            uint8_t name = framebuf[vram_base + (n << 2) + 2];
-            uint8_t color = framebuf[vram_base + (n << 2) + 3];
-            uint16_t vrama = (regs[6] & 7) << 11;
-            if(regs[1] & 2) 
-                vrama |= ((name & 0xFC) << 3) | (yys[i] & 0xF);    // 16x16
-            else
-                vrama |= (name << 3) | (yys[i] & 0x7);    // 8x8
-            uint16_t pixels = framebuf[vrama] << 8;
-            pixels |= framebuf[vrama | 0x10];               // Read 8 more pixels for 16x16 sprites
-            unsigned count = regs[1] & 2 ? 16 : 8;
-            unsigned early_clocks = 0;
-            if(color & 0x80) {
-                // early bit set.
-                if(ux >= 32) {
-                    ux -= 32;       // Already past 32, just draw
-                } else {
-                    early_clocks = 32 - (ux & 0x1F);
-                    ux = 0;         // sprite bleeds in from the left.
-                }
-            } else {
-                // Normal. Early bit not set.
-                early_clocks = 0;
-            }
-            // if(color & 0x80)
-            //    printf("Ready to draw ux=%d early_clocks=%d pixels=0x%04X\n",ux, early_clocks, pixels);
-            // Now ux is the X coordinate where the sprite goes to.
-            // Draw the sprite.
-            color &= 0xF;
-            uint8_t *d = destline + (ux >> 1);
-            while(count > 0) {
-                if(early_clocks) {
-                    early_clocks--;
-                } else {
-                    // Push out pixels.
-                    if(pixels & 0x8000) {
-                        // Only draw the pixel if the sprite has a color, i.e.
-                        // is not transparent. We still need to work on coincidence.
-                        if(color) {
-                            if(ux & 1)
-                                *d = (*d & 0xF0) | color;
-                            else    
-                                *d = (*d & 0xF) | (color << 4);
-                        }
-                    }
-                    if(ux & 1)
-                        d++;
-                    ux++;
-                }
-                pixels <<= 1;
-                count--;
-            }
-        }
-        // printf("sprites %d exit\n", y);
-    }
-
-    void scanline(int y) {
-        // Render one scanline from framebuf to ti_rendered.
-        name_table_addr = (regs[2] & 0xF) << 10;
-        unsigned color_table_addr; 
-        const int cell_width = regs[1] & 0x10 ? 6 : 8;
-        const int cells = regs[1] & 0x10 ? 40 : 32;
-        name_table_addr += (y >> 3) * cells;
-        unsigned pattern_addr;
-
-        for(int x=0; x<cells; x++) {
-            uint8_t name = framebuf[name_table_addr];
-            if(regs[1] & 8)
-                pattern_addr = ((regs[4] & 7) << 11) | (name << 3) | ((y  >> 2) & 7); // Multicolor mode
-            else if((regs[0] & 2) == 0) {
-                pattern_addr = ((regs[4] & 7) << 11) | (name << 3) | (y & 7); // GM1 
-                color_table_addr = (regs[3] << 6) | (name >> 3);
-            } else {
-                // GM2
-                pattern_addr = (((name_table_addr >> 8) & (regs[4] & 3)) << 11) | (name << 3) | (y & 7);
-                color_table_addr = ((regs[3] & 0x80) << 6) // MSB
-                    + (((regs[3] & 0x7F) << 6) & (((name_table_addr & 0x300) | (name & 0xF8)) << 3))
-                    + (((name & 7) << 3) | (y & 7)); // 6 LSBs
-            }
-            uint8_t pattern = framebuf[pattern_addr];
-            uint8_t color = framebuf[color_table_addr];
-
-            unsigned color0, color1;
-            if(regs[1] & 8) {
-                // Multicolor mode
-                color1 = pattern >> 4;
-                color0 = pattern & 0xF;
-            } else {
-                color1 = regs[1] & 0x10 ? regs[7] >> 4  : color >> 4;
-                color0 = (color & 0xF) == 0 || (regs[1] & 0x10) ? regs[7] & 0xF : color & 0xF;
-            }
-
-#ifdef DEBUG_PRINT
-            if(x == 0 && (y & 7) == 0) {
-                printf("y=%d name=%d name_table_addr=0x%X pattern_addr=0x%X color_table_addr=0x%X color0=%d color1=%d color=0x%02X\n", 
-                y>>3, name, name_table_addr, pattern_addr, color_table_addr, color0, color1, color);
-            }
-#endif
-
-            // Pump pixels.
-            uint8_t *p = ti_rendered + (y << 7) + (x*cell_width >> 1);            
-#ifdef DEBUG_PRINT            
-            if((unsigned long)(p - ti_rendered) > sizeof(ti_rendered)) {
-                printf("overflow %ld y=%d\n", p-ti_rendered, y);
-            }
-#endif          
-            if(cell_width == 8) {
-                p[0] = ((pattern & 0x80 ? color1 : color0) << 4) | (pattern & 0x40 ? color1 : color0);
-                p[1] = ((pattern & 0x20 ? color1 : color0) << 4) | (pattern & 0x10 ? color1 : color0);
-                p[2] = ((pattern & 0x08 ? color1 : color0) << 4) | (pattern & 0x04 ? color1 : color0);
-                p[3] = ((pattern & 0x02 ? color1 : color0) << 4) | (pattern & 0x01 ? color1 : color0);
-                p += 4;
-            } else {
-                // cell width is 6, text mode.
-                p[0] = ((pattern & 0x80 ? color1 : color0) << 4) | (pattern & 0x40 ? color1 : color0);
-                p[1] = ((pattern & 0x20 ? color1 : color0) << 4) | (pattern & 0x10 ? color1 : color0);
-                p[2] = ((pattern & 0x08 ? color1 : color0) << 4) | (pattern & 0x04 ? color1 : color0);
-                p += 3;
-            }
-            name_table_addr++;
-        }
-        sprites(y, ti_rendered + (y << 7));
-        if(y == 191) {
-            // Generate interrupt at the end of the last scanline.
-            status |= 0x80;
-        }
-    }
-    uint32_t render(int yoffset) {
-        // Now render from ti_rendered to our framebuffer.
-        uint32_t start = now_us();
-        // My selfmade renderer. Center the image on the screen.
-        int w = screen.bounds.w;
-        int x_src_offset = 0;
-        int x_dest_offset = 0;
-        if(w < 256) {
-            x_src_offset = (256-w)/2;
-            x_src_offset >>= 1; // Divide further by 2 as each byte is 2 pixels.
-        } else if(w > 256) {
-            x_dest_offset = (w-256)/2;
-        }
-        if(screen.format == PixelFormat::RGB565) {
-            for(int y=0; y<192; y++) {
-                uint8_t *p = ti_rendered + (y << 7) + x_src_offset;
-                uint16_t *d = (uint16_t *)(screen.data + (yoffset+y)*screen.row_stride+x_dest_offset*2);
-                for(int x=0; x<128-x_src_offset*2; x++) {
-                    // Two pixels per loop here.
-                    d[0] = palette_rgb565[*p >> 4];
-                    d[1] = palette_rgb565[*p & 0xF];
-                    d += 2;
-                    p++;
-                }
-            }
-        } else if(screen.format == PixelFormat::RGB) {
-            // 24 bit RGB
-            for(int y=0; y<192; y++) {
-                uint8_t *p = ti_rendered + (y << 7) + x_src_offset;
-                uint8_t *d = screen.data + (yoffset+y)*screen.row_stride+3*x_dest_offset;
-                for(int x=0; x<128; x++) {
-                    // Two pixels per loop here.
-                    uint32_t px = *p >> 4;
-                    d[0] = palette_rgb888[px << 2];                    
-                    d[1] = palette_rgb888[(px << 2) + 1];
-                    d[2] = palette_rgb888[(px << 2) + 2];
-                    px = *p & 0xF;
-                    d[3] = palette_rgb888[px << 2];                    
-                    d[4] = palette_rgb888[(px << 2) + 1];
-                    d[5] = palette_rgb888[(px << 2) + 2];
-                    d += 6;
-                    p++;
-                }
-            }
-
-        }    
-        uint32_t end = now_us();
-        return us_diff(start, end);
-    }
-    /**
-     * @brief CPU write to VDP. 
-     * 
-     * @param regs_vram registers/data. A1 on the TI-99/4A
-     * @param data 
-     */
-    void write(bool regs_vram, uint8_t data) {
-        vdp_writes++;
-        if(regs_vram) {
-            if(!write_state) {
-                hold_reg = data;
-                write_state = true; 
-                // printf("TMS9918 hold reg 0x%02X\n", hold_reg);
-            } else {
-                switch(data >> 6) {
-                    case 0: // read from VRAM setup
-                        vram_addr = ((data & 0x3F) << 8) | hold_reg;
-                        // printf("Ready for VRAM read from 0x%04X\n", vram_addr);
-                        break;
-                    case 1: // write to VRAM setup
-                        vram_addr = ((data & 0x3F) << 8) | hold_reg;
-                        // printf("Ready for VRAM write to 0x%04X\n", vram_addr);
-                        break;
-                    case 2: // write to VDP register
-                        regs[data & 7] = hold_reg;
-                        // printf("VDP register %d write 0x%02X\n", data & 7, hold_reg);
-                        reg_writes++;
-                        break;
-                    default:
-                        break;
-                }
-                write_state = false;
-            }
-        } else {
-            write_state = false;    // accesses to VRAM port reset write state
-            framebuf[vram_addr] = data;
-            vram_addr = 0x3FFF & (vram_addr+1);
-            vram_writes++;
-        }
-    }
-    /**
-     * @brief CPU reads from VDP.
-     * 
-     * @param regs_vram      false: read from VRAM. true: read from status register.
-     * @return uint8_t  data from VRAM or status register.
-     */
-    uint8_t read(bool regs_vram) {
-        uint8_t result;
-        write_state = false;    // any read resets write state
-        if(regs_vram) {
-            result = status;
-            // if(interrupt_pending()) {
-            //     printf("VDP interrupt cleared.\n");
-            // }
-            status &= 0x1F; // clear interrupt request, fifth sprite etc flags.
-        } else {
-            // read from VRAM.
-            result = framebuf[vram_addr];
-            // printf("VRAM read [0x%04X]=0x%02X\n", vram_addr, result);
-            vram_addr = 0x3FFF & (vram_addr+1);
-        }
-        return result;
-    }
-    bool interrupt_pending() {
-        return !!(status & 0x80);
-    }
-};
 
 tms9918_t tms9918;
 
@@ -903,9 +545,9 @@ void render(uint32_t time) {
 
     if(fill_full_screen) {
         // Fill the whole screen with one of TI's colors
-        screen.pen = Pen( palette_lookup[full_screen_color] & 0xE0,
-                        (palette_lookup[full_screen_color] & 0x1C) << 3,
-                        (palette_lookup[full_screen_color] & 0x3) << 6);
+        screen.pen = Pen(tms9918_t::palette_lookup[full_screen_color] & 0xE0,
+                        (tms9918_t::palette_lookup[full_screen_color] & 0x1C) << 3,
+                        (tms9918_t::palette_lookup[full_screen_color] & 0x3) << 6);
         screen.rectangle(Rect(0,15,TI_WIDTH, TI_HEIGHT+15));
         screen.pen = screen.pen.r ? Pen(0,0,0) : Pen(255,255,255);
         screen.text("color " + std::to_string(full_screen_color), minimal_font, Point(5, 20));
@@ -922,7 +564,7 @@ void render(uint32_t time) {
             " row: "+ std::to_string(screen.row_stride),
             minimal_font, Point(5,30));    
     } else {
-        uint32_t t = tms9918.render(15);
+        uint32_t t = tms9918.render(ti_rendered, 15);
         if(debug_show_pixel) {
             debug_show_pixel = false;
             show_pixel_RGB(screen.data + screen.row_stride*40);
@@ -964,6 +606,11 @@ void render(uint32_t time) {
         }
         screen.text("kHz: " + std::to_string(kHz), ti_font, Point(188, 220));
 
+    }
+
+    if(bench_result) {
+        screen.text("Benchmark: " + std::to_string(bench_result), ti_font, Point(20, 100));
+        screen.text("MHz: " + std::to_string(bench_result/1000000), ti_font, Point(20, 108));
     }
 
 }
@@ -1051,6 +698,35 @@ void update(uint32_t time) {
     if((buttons & Button::B) && (buttons.pressed & Button::DPAD_DOWN) && cpu_clk > 500000)
         cpu_clk -= 500000;  // sub 0.5MHz
 
+    // Run Benchmark
+    if((buttons & Button::B) && (buttons.pressed & Button::DPAD_LEFT)) {
+        // Run benchmark: take one second, and see how many clocks we can do.
+        cpu.reset();
+        uint32_t bench_start = now_us();
+        uint32_t bench_end = bench_start + 1000000;
+        int i;
+        while(now_us() < bench_end && !cpu.is_stuck()) {
+            for(i=0; i<50 && !cpu.is_stuck(); i++) {
+                cpu.step();
+            }
+            if (tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
+                // VDP interrupt
+                // uint16_t cst = cpu.st;
+                bool b = cpu.interrupt(1);
+                if(b) {
+                    // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
+                    vdp_ints++;
+                }
+            }        
+        }
+        bench_result = cpu.get_cycles();
+        // reset again at the end of bench
+        tms9918.init();
+        cpu.reset();    
+        last_update_tms9918_run_cycles = cpu.get_cycles();
+        // last_update_time = time  + 1000;
+    }
+
     if(buttons.pressed & Button::X) {
         // cpu.reset();
         if(cpu.is_stuck()) {
@@ -1124,7 +800,7 @@ void update(uint32_t time) {
                     fill_full_screen = false;
                     uint32_t start = now_us();
                     for(int y=0; y<192; y++)
-                        tms9918.scanline(y);    
+                        tms9918.scanline(ti_rendered, y);    
                     time_scanlines = us_diff(start, now_us());
                     // Add the time_scanlines to start_cpu to remove the effect of scanline(..) calls from CPU time.
                     start_cpu += time_scanlines;
@@ -1162,7 +838,6 @@ void update(uint32_t time) {
 #endif
         }
         time_cpu = now_us() - start_cpu;
-
     }
 
     if(buttons & Button::DPAD_LEFT) {

@@ -116,6 +116,7 @@ void tms9900_t::reset() {
   func[14] = &tms9900_t::do_execE;
   func[15] = &tms9900_t::do_execF;
 
+  cycles = 0;
   st = 0;
   stuck = false;
   do_blwp(0);
