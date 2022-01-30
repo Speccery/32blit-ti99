@@ -292,6 +292,13 @@ int tms9900_t::dasm_instruction(char *dst, uint16_t addr) {
   return steps;
 }
 
+// do_exec0: top nibble of opcode is zero.
+// Group      Mask    Compare   Selmask Opbits  Instructions
+// Shifts     0x0C00  0x0800    0x0300  8       SRA, SRL, SLA, SRC
+// Stuff      0x0C00  0x0400    0x03C0  10      BLWP, B, X, CLR, NEG, INV, INC, INCT,  DEC, DECT, BL, SWPB, SETO, ABS, stuck?, stuck?, stuck?
+// Immediate  0x0F00  0x0200    0x00E0  11      LI, AI, ANDI, ORI, CI, STWP, STST, LWPI
+// System     0x0F00  0x0300    0x00E0  11      LIMI, stuck?, IDLE, RSET, RTWP, CKON, CKOF, LREX
+
 void tms9900_t::do_exec0() {
     // { 0x0A00, 0xFF00, shifts, "SLA" }, 
     // { 0x0800, 0xFF00, shifts, "SRA" }, 
@@ -505,52 +512,54 @@ void tms9900_t::do_exec0() {
         // printf("CI ST: 0x%04X, imm 0x%04X, src=0x%04X\n", st, imm, src);
         return;
       }
-    }
-  }
-
-  switch(ir & 0xFFE0) {
-    case 0x0300: {  // LIMI
-      add_cycles(16);
-      uint16_t imm = next();
-      st = (st & 0xFFF0) | (imm & 0xF);
-      return;
-    }
-    case 0x02C0: {      // STST
-      add_cycles(8);
-      write_reg(ir & 0xF, st);
-      return;
-    }
-    case 0x02A0: {      // STWP
-      add_cycles(8);
-      write_reg(ir & 0xF, wp);
-      return;
-    }
-    case 0x02E0: {      // LWPI
-      add_cycles(10);
-      uint16_t imm = next();
-      wp = imm;
-      return;
-    }
-    case 0x0380: {      // RTWP
-      add_cycles(14);
-      pc = read(wp + (14 << 1));
-      st = read(wp + (15 << 1));
-      wp = read(wp + (13 << 1));
-      return;
+      case 5: { // STWP 02A0
+        add_cycles(8);
+        write_reg(ir & 0xF, wp);
+        return;
+      }
+      case 6: { // STST 02C0
+        add_cycles(8);
+        write_reg(ir & 0xF, st);
+        return;
+      }
+      case 7: { // LWPI 02E0
+        add_cycles(10);
+        uint16_t imm = next();
+        wp = imm;
+        return;
+      }
     }
   }
 
   if((ir & 0xFF00) == 0x0300) {
     switch((ir >> 5) & 7) {
-      case 3: // RSET
-        st &= ~0xF;
+      case 0: { // LIMI 0300
+        add_cycles(16);
+        uint16_t imm = next();
+        st = (st & 0xFFF0) | (imm & 0xF);
+        return;
+      }
+      case 1: break;  // nothing, get stuck
       case 2: // IDLE
         // BUGBUG should stop and wait for interrupt here.
+        add_cycles(12);
+        return;
+      case 3: // RSET
+        st &= ~0xF;
+        add_cycles(12);
+        return;
+      case 4: { // RTWP
+        add_cycles(14);
+        pc = read(wp + (14 << 1));
+        st = read(wp + (15 << 1));
+        wp = read(wp + (13 << 1));
+        return;
+      }
       case 6: // CKOF
       case 5: // CKON
       case 7: // LREX
         add_cycles(12);
-        break;
+        return;
       default:
         break;
     }
@@ -738,8 +747,8 @@ void tms9900_t::do_exec3() {
 }
 void tms9900_t::do_exec4() {      // SZC
   add_cycles(14);
-  uint16_t src = read_operand(ir, true);
-  uint16_t dst_addr = source_address(ir >> 6, true);
+  uint16_t src = read_operand_word(ir);
+  uint16_t dst_addr = source_address_word(ir >> 6);
   uint16_t dst = read(dst_addr);
   dst &= ~src;
   flags_012_others(dst);
@@ -759,8 +768,8 @@ void tms9900_t::do_exec5() {       // SZCB
 
 void tms9900_t::do_exec6() {      // S substract
   add_cycles(14);
-  const uint16_t src = read_operand(ir, true);
-  const uint16_t dst_addr = source_address(ir >> 6, true);
+  const uint16_t src = read_operand_word(ir);
+  const uint16_t dst_addr = source_address_word(ir >> 6);
   const uint16_t dst = read(dst_addr);
   const unsigned result = dst - src;
   write(dst_addr, result);
@@ -783,8 +792,8 @@ void tms9900_t::do_exec7() {    // SB
 
 void tms9900_t::do_exec8() {    // C
   add_cycles(14);
-  const uint16_t src = read_operand(ir, true);
-  const uint16_t dst_addr = source_address(ir >> 6, true);
+  const uint16_t src = read_operand_word(ir);
+  const uint16_t dst_addr = source_address_word(ir >> 6);
   const uint16_t dst = read(dst_addr);
   set_flags_compare(dst, src);
 }
@@ -801,8 +810,8 @@ void tms9900_t::do_exec9() {    // CB
 
 void tms9900_t::do_execA() {    // A add
   add_cycles(14);
-  const uint16_t src = read_operand(ir, true);
-  const uint16_t dst_addr = source_address(ir >> 6, true);
+  const uint16_t src = read_operand_word(ir);
+  const uint16_t dst_addr = source_address_word(ir >> 6);
   const uint16_t dst = read(dst_addr);
   const unsigned result = dst + src;
   write(dst_addr, result);
@@ -827,8 +836,8 @@ void tms9900_t::do_execC() {    // MOV
   add_cycles(14);
   // Dual operand cycle.
   // Source operand, bits 5..0
-  uint16_t src = read_operand(ir, true);
-  uint16_t dst_addr = source_address(ir >> 6, true);
+  uint16_t src = read_operand_word(ir);
+  uint16_t dst_addr = source_address_word(ir >> 6);
   flags_012_others(src);
   read(dst_addr); // Dummy read but needed for compatibility
   write(dst_addr, src);
@@ -847,8 +856,8 @@ add_cycles(14);
 
 void tms9900_t::do_execE() {      // SOC
   add_cycles(14);
-  uint16_t src = read_operand(ir, true);
-  uint16_t dst_addr = source_address(ir >> 6, true);
+  uint16_t src = read_operand_word(ir);
+  uint16_t dst_addr = source_address_word(ir >> 6);
   uint16_t dst = read(dst_addr);
   dst |= src;
   flags_012_others(dst);
@@ -900,16 +909,6 @@ void tms9900_t::do_parity(uint16_t src) {
   st |= 0x100 & paritys ? ST10 : 0;
 }
 
-void tms9900_t::flags_012_others(uint16_t t) {
-  // st[15] <= alu_logical_gt;
-  // st[14] <= alu_arithmetic_gt;
-  // st[13] <= alu_flag_zero;
-  st &= ~(ST15 | ST14 | ST13);
-  st |= t ? ST15 : 0;
-  st |= !(t & 0x8000) && t ? ST14 : 0;
-  st |= t == 0 ? ST13 : 0;
-}
-
 uint16_t tms9900_t::read_operand(uint16_t op, bool word_operation) {
   uint16_t sa = source_address(op, word_operation);
   // Do byte selection.
@@ -924,6 +923,36 @@ uint16_t tms9900_t::read_operand(uint16_t op, bool word_operation) {
   } else {
     return read(sa & ~1) & 0xFF00; // high byte
   }
+}
+
+uint16_t tms9900_t::source_address_word(uint16_t op) {
+  op &= 0x3F;
+  switch(op & 0x30) {
+    case 0x00: return wp+((op & 0xF) << 1); // workspace register
+    case 0x10: 
+      add_cycles(4);
+      return read_reg(op & 0xF);   // workspace register indirect
+    case 0x20: {
+      // symbolic or indexed mode.
+      add_cycles(8);
+      uint16_t t = next();
+      if((op & 0xF) == 0) {
+        // symbolic addressing mode.
+        return t;
+      } else {
+        // Indexed addressing mode.
+        return t + read_reg(op & 0xF);
+      }
+    }
+    case 0x30: {
+      // workspace register indirect auto increment
+      add_cycles(8);
+      uint16_t t = read_reg(op & 0xF);
+      write_reg(op & 0xF, t + 2);
+      return t;
+    }
+  }  
+  return 0; // never executed
 }
 
 uint16_t tms9900_t::source_address(uint16_t op, bool word_operation) {

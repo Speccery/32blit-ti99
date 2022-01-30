@@ -50,7 +50,7 @@ class tms9900_t {
     bool interrupt(uint8_t level);
     unsigned long get_cycles() const;
     unsigned long get_instructions() const;
-    void add_ext_cycles(unsigned u) {   //!< Public function to add cycles. External interface enables computation of wait states.
+    inline void add_ext_cycles(unsigned u) {   //!< Public function to add cycles. External interface enables computation of wait states.
       cycles += u;
       wait_cycles += u;
     }
@@ -84,7 +84,19 @@ class tms9900_t {
       pc += 2;
       return d;
     }
-    void flags_012_others(uint16_t t);
+    inline void flags_012_others(uint16_t t) {
+      // st[15] <= alu_logical_gt;
+      // st[14] <= alu_arithmetic_gt;
+      // st[13] <= alu_flag_zero;
+      st &= ~(ST15 | ST14 | ST13);
+      st |= t ? ST15 : 0;
+      st |= !(t & 0x8000) && t ? ST14 : 0;
+      st |= t == 0 ? ST13 : 0;
+    }
+    inline uint16_t read_operand_word(uint16_t op) {
+      uint16_t sa = source_address_word(op);
+      return read(sa);
+    }
     void do_parity(uint16_t src);
     void write_byte(uint16_t dst_addr, uint16_t dst);
     uint16_t read_byte(uint16_t addr);
@@ -132,5 +144,5 @@ class tms9900_t {
     int dasm_one(char *buf, int state_in, int opcode);
     uint16_t read_operand(uint16_t op, bool word_operation);
     uint16_t source_address(uint16_t op, bool word_operation);
-    
+    uint16_t source_address_word(uint16_t op);  
 };
