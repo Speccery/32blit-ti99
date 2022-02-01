@@ -449,17 +449,13 @@ protected:
     virtual void write(uint16_t addr, uint16_t data) {
         addr &= ~1; // make the addres even
 
+#ifdef VERIFY
         if(verify)
             check_write_in_verify_buffer(addr, data);
-
-         if(addr >= 0 && addr < 0x2000) {
-             printf("Write to ROM [%04X]=%04X\n", addr, data);
-         } else if(addr >= 0x8300 && addr < 0x8400) {
+#endif
+         if(addr >= 0x8300 && addr < 0x8400) {
              scratchpad[addr - 0x8300] = data >> 8;
              scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
-         } else if(addr >= 0x8400 && addr < 0x8800) {
-             // sound chip access
-             add_ext_cycles(4);
          } else if(addr >= 0x8C00 && addr < 0x9000) {
             // VDP write
             tms9918.write(!!(addr & 2), data >> 8);
@@ -467,6 +463,11 @@ protected:
             // if(--count == 0)
             //    stuck = true;
             add_ext_cycles(4);
+         } else if(addr >= 0 && addr < 0x2000) {
+             printf("Write to ROM [%04X]=%04X\n", addr, data);
+         } else if(addr >= 0x8400 && addr < 0x8800) {
+             // sound chip access
+             add_ext_cycles(4);
          } else if (addr >= 0x9c00 && addr < 0xA000) {
             grom.write(addr, data >> 8);
             if(grom.should_cpu_stat_be_shown())
@@ -692,7 +693,7 @@ void render(uint32_t time) {
 
     if(bench_result) {
         screen.text("Benchmark: " + std::to_string(bench_result), ti_font, Point(20, 100));
-        screen.text("MHz: " + std::to_string(bench_result/1000000), ti_font, Point(20, 108));
+        screen.text("MHz: " + std::to_string(bench_result/100000), ti_font, Point(20, 108));
     }
 
 }
@@ -782,10 +783,10 @@ void update(uint32_t time) {
 
     // Run Benchmark
     if((buttons & Button::B) && (buttons.pressed & Button::DPAD_LEFT)) {
-        // Run benchmark: take one second, and see how many clocks we can do.
+        // Run benchmark: take 0.1 seconds, and see how many clocks we can do.
         cpu.reset();
         uint32_t bench_start = now_us();
-        uint32_t bench_end = bench_start + 1000000;
+        uint32_t bench_end = bench_start + 100000;
         int i;
         while(now_us() < bench_end && !cpu.is_stuck()) {
             for(i=0; i<50 && !cpu.is_stuck(); i++) {
