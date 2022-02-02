@@ -29,7 +29,6 @@ static  uint8_t ti_font_width[96] = {
 const Font ti_font(&ti_font_data[0][0], ti_font_width, 8, 8);
 
 #define TI_CPU_CLK (3000000)
-uint32_t cpu_clk = TI_CPU_CLK;
 
 // Our 256*192 framebuffer of 4 bits per pixels TMS9918 pixels.
 #define TI_WIDTH 256
@@ -40,7 +39,6 @@ uint8_t full_screen_color = 0;
 bool fill_full_screen = true;
 bool debug_show_pixel = false;
 
-uint32_t time_scanlines = 0;
 uint32_t time_cpu = 0;      // time taken by CPU cycles between TMS9918 scanlines through the screen
 FILE *debug_log = nullptr;
 uint32_t bench_result = 0;
@@ -85,8 +83,6 @@ float    vdp_draws = 0;
 uint32_t last_render_frames=0;
 uint32_t render_frames=0;
 uint32_t last_update_time = 0;
-uint32_t last_update_tms9918_run_cycles = 0;    // Last CPU cycles we did run the VDP
-uint32_t drawn_frames = 0;
 uint32_t last_drawn_frames = 0;
 
 ///////////////////////////////////////////////////////////////////////////
@@ -106,8 +102,6 @@ void init() {
     last_render_frames = 0;
     render_frames = 0;
     last_update_time = 0;
-    last_update_tms9918_run_cycles = 0;
-    drawn_frames = 0;
     last_drawn_frames = 0;
 
     // Copy TI font data over from GROM.
@@ -215,7 +209,8 @@ void render(uint32_t time) {
         static averager_t<uint32_t> tcpu;
         t9918.new_value(t);
         trender.new_value(us_diff(draw_start, draw_end));
-        tscanlines.new_value(time_scanlines);
+
+        tscanlines.new_value(cpu.get_scanlines_run_time());
         tcpu.new_value(time_cpu);
 
         screen.text("CPU: " + std::to_string(tcpu.average()), ti_font,       Point(1, 220));
@@ -224,9 +219,9 @@ void render(uint32_t time) {
         if(time - last_render_second >= 1000) {
             kHz = (cpu.get_cycles() - last_render_cycles) / ((time - last_render_second));
             fps = 1000.0f*(render_frames - last_render_frames) / (time - last_render_second);
-            vdp_draws = 1000.0f*(drawn_frames - last_drawn_frames) / (time - last_render_second);
+            vdp_draws = 1000.0f*(cpu.get_drawn_frames() - last_drawn_frames) / (time - last_render_second);
             last_render_frames = render_frames;
-            last_drawn_frames = drawn_frames;
+            last_drawn_frames = cpu.get_drawn_frames();
             last_render_second = time;
             last_render_cycles = cpu.get_cycles();
         }
@@ -285,7 +280,6 @@ void run_verify_step(bool verbose=true) {
 //
 void update(uint32_t time) {
     static bool disasm = false;
-    static int vdp_ints = 0;
 
     /* if(buttons.pressed & Button::A) {
         // Advance to next color.
@@ -320,9 +314,9 @@ void update(uint32_t time) {
 
     // CPU clock adjustment
     if((buttons & Button::B) && (buttons.pressed & Button::DPAD_UP))
-        cpu_clk += 500000;  // add 0.5MHz
-    if((buttons & Button::B) && (buttons.pressed & Button::DPAD_DOWN) && cpu_clk > 500000)
-        cpu_clk -= 500000;  // sub 0.5MHz
+        cpu.set_cpu_clk(cpu.get_cpu_clk() + 500000);  // add 0.5MHz
+    if((buttons & Button::B) && (buttons.pressed & Button::DPAD_DOWN) && cpu.get_cpu_clk() > 500000)
+        cpu.set_cpu_clk(cpu.get_cpu_clk() - 500000);  // sub 0.5MHz
 
     // Run Benchmark
     if((buttons & Button::B) && (buttons.pressed & Button::DPAD_LEFT)) {
@@ -330,26 +324,12 @@ void update(uint32_t time) {
         cpu.reset();
         uint32_t bench_start = now_us();
         uint32_t bench_end = bench_start + 100000;
-        int i;
         while(now_us() < bench_end && !cpu.is_stuck()) {
-            for(i=0; i<50 && !cpu.is_stuck(); i++) {
-                cpu.step();
-            }
-            if (cpu.tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
-                // VDP interrupt
-                // uint16_t cst = cpu.st;
-                bool b = cpu.interrupt(1);
-                if(b) {
-                    // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
-                    vdp_ints++;
-                }
-            }        
+            cpu.run_cpu(300, nullptr, false);    // Run the CPU for 300 cycles, i.e. 100 microseconds of CPU time
         }
         bench_result = cpu.get_cycles();
         // reset again at the end of bench
-        cpu.tms9918.init();
         cpu.reset();    
-        last_update_tms9918_run_cycles = cpu.get_cycles();
         // last_update_time = time  + 1000;
     }
 
@@ -374,96 +354,16 @@ void update(uint32_t time) {
     }
 
     if(!cpu.is_stuck() && 1) {
-        uint32_t cycles_to_run = (time - last_update_time)*(cpu_clk/1000);   // 3000 = 3.0MHz
-        last_update_time = time;
-        unsigned long start_cycles = cpu.get_cycles();
-        int i=0;
-        uint32_t start_cpu = now_us();
-        while(cpu.get_cycles() - start_cycles < cycles_to_run && !cpu.is_stuck()) { 
-            i++;
-#ifdef VERIFY
-            uint16_t a = tursi_cpu.GetPC();
-            run_verify_step(false);
-            if(cpu.is_stuck()) {
-                char s[80];
-                cpu.dasm_instruction(s, a);
-                printf("STUCK %d %04X %s\n", tursi_cpu.GetCycleCount(), tursi_cpu.GetPC(), s);
-            }
-
-            // Check interrupt status every 16 instructions
-            if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
-                // printf("Interrupt stuff begin %ld.\n", cpu.get_instructions());
-                uint16_t cst = cpu.st;
-                cpu.verify_begin();
-                // BUGBUG CRU masking not done yet.
-                if((tursi_cpu.GetST() & 0xF) > 1)
-                    tursi_cpu.TriggerInterrupt(4);
-                cpu.verify_switch_on_reads();
-                bool b = cpu.interrupt(1);
-                cpu.verify_end();
-                // printf("Interrupt stuff end. CPU did vector: %s \n", b ? "true" : "false");
-                if(b) {
-                    printf("CPU vectored to interrupt, 0x%04X.\n", cst);
-                    vdp_ints++;
-                }
-            }
-#else
-            if(disasm) {
-                char s[80];
-                cpu.dasm_instruction(s, cpu.get_previous_pc());
-                printf("%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
-                if(debug_log) {
-                    fprintf(debug_log, "%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
-                    fflush(debug_log);
-                }
-            }
-
-            cpu.step();
-            if(!(i & 0xF) && !cpu.is_stuck()) { // Run this every 16 instructions
-                // We run at 50 fps
-                if(cpu.get_cycles() >= last_update_tms9918_run_cycles + cpu_clk/50) {
-                    last_update_tms9918_run_cycles = cpu.get_cycles();
-                    fill_full_screen = false;
-                    uint32_t start = now_us();
-                    for(int y=0; y<192; y++)
-                        cpu.tms9918.scanline(ti_rendered, y);    
-                    time_scanlines = us_diff(start, now_us());
-                    // Add the time_scanlines to start_cpu to remove the effect of scanline(..) calls from CPU time.
-                    start_cpu += time_scanlines;
-                    drawn_frames++;
-                }                
-                if (cpu.tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
-                    // VDP interrupt
-                    // uint16_t cst = cpu.st;
-                    bool b = cpu.interrupt(1);
-                    if(b) {
-                        // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
-                        vdp_ints++;
-                    }
-                }
-            }
-            if(cpu.is_stuck()) {
-                // oh no, we became stuck!
-                char s[80];
-                cpu.dasm_instruction(s, cpu.get_previous_pc());
-                printf("%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
-                printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
-                    cpu.grom.get_read_addr(), 
-                    cpu.grom.get_read_addr() < 0x6000 ? grom994a_data[cpu.grom.get_read_addr()-1] : 0xEE,
-                    cpu.tms9918.vram_writes, cpu.tms9918.vdp_writes, cpu.tms9918.vram_addr, cpu.tms9918.reg_writes);
-                if(debug_log) {
-                    fprintf(debug_log, "CPU STUCK\n");
-                    fprintf(debug_log, "%ld %04X %s\n", cpu.get_instructions(), cpu.get_pc(), s);
-                    fprintf(debug_log, "GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
-                        cpu.grom.get_read_addr(), 
-                        cpu.grom.get_read_addr() < 0x6000 ? grom994a_data[cpu.grom.get_read_addr()-1] : 0xEE,
-                        cpu.tms9918.vram_writes, cpu.tms9918.vdp_writes, cpu.tms9918.vram_addr, cpu.tms9918.reg_writes);
-                    fflush(debug_log);
-                }
-            }
-#endif
+        int delta = time - last_update_time;
+        if(delta >= 11) {   // 11 or more since last call (this is called every 10ms)
+            uint32_t cycles_to_run = delta*(cpu.get_cpu_clk()/1000);   // 3000 = 3.0MHz
+            last_update_time = time;
+            uint32_t start_cpu = now_us();
+            fill_full_screen = false;
+            uint32_t scantime = cpu.run_cpu(cycles_to_run, ti_rendered, disasm);
+            time_cpu = now_us() - start_cpu - scantime;
+            // printf("st %d cpu %d ", scantime, delta);
         }
-        time_cpu = now_us() - start_cpu;
     }
 
     if(buttons & Button::DPAD_LEFT) {
@@ -473,6 +373,7 @@ void update(uint32_t time) {
             disasm = true;
             cpu.get_instructions() = 0;
             debug_log = fopen("debug.txt", "wt");
+            cpu.set_debug_log(debug_log);
         }
 */        
     } else {
@@ -486,7 +387,7 @@ void update(uint32_t time) {
     }
     if(buttons.pressed & Button::DPAD_UP) {
         printf("TMS9901 CRU 0x%08X VDP pending %d VDP ints %d\n",
-            cpu.tms9901_cru, cpu.tms9918.interrupt_pending(), vdp_ints
+            cpu.tms9901_cru, cpu.tms9918.interrupt_pending(), cpu.get_vdp_interrupts()
         );
         if(cpu.is_stuck()) {
                 char s[80];
@@ -500,36 +401,3 @@ void update(uint32_t time) {
     }
 }
 
-#ifdef VERIFY
-
-Word tursi_cpu_t::GetSafeWord(int x, int bank) {
-    return cpu.verify_read(x);
-}
-
-void wrword(Word x, Word y)
-{ 
-	x&=0xfffe;		// drop LSB
-	// now write the new data
-	// wcpubyte(x,(Byte)(y>>8));
-	// wcpubyte(x+1,(Byte)(y&0xff));
-
-    cpu.verify_write(x, y);
-}
-
-Word romword(Word x, bool rmw)
-{ 
-	x&=0xfffe;		// drop LSB
-//	// TODO: this reads the LSB first. Is this the correct order??
-// 	return((rcpubyte(x,rmw)<<8)+rcpubyte(x+1,rmw));
-    return cpu.verify_read(x);
-}
-
-void wcru(Word addr,int data) {
-    cpu.verify_write_cru_bit(addr << 1, data) ;
-}
-
-int rcru(Word addr) {
-  return cpu.verify_read_cru_bit( addr << 1);
-}
-
-#endif

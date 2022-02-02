@@ -38,6 +38,14 @@ public:
     tms9918_t tms9918;
     tigrom_t grom;
     uint8_t scratchpad[256];    
+  protected:
+    uint32_t vdp_interrupts;
+    uint32_t cpu_clk;                           //!< CPU clock frequency in Hertz
+    uint32_t last_update_tms9918_run_cycles;    //!< Last CPU cycles we did run the VDP
+    uint32_t scanlines_run_time;                //!< us taken by last scanlines run
+    uint32_t drawn_frames;                      //!< Number of frames handled by scanlines routine
+public:    
+
 
 #ifdef VERIFY
     // Verification system: Tursi's CPU is run first for one cycle.
@@ -74,6 +82,31 @@ public:
     virtual void reset();
     void set_debug_log(FILE *f) {
       debug_log = f;
+    }
+    void set_cpu_clk(uint32_t s) {
+      cpu_clk = s;
+    }
+    uint32_t get_cpu_clk() const {
+      return cpu_clk;
+    }
+    uint32_t get_vdp_interrupts() const {
+      return vdp_interrupts;
+    }
+    uint32_t get_last_tms9918_run() const {
+      return last_update_tms9918_run_cycles;
+    }
+    uint32_t run_cpu(uint32_t cycles_to_run, uint8_t *render_buffer, bool disasm);  // returns number of microseconds spent on scanline conversions
+    uint32_t now_us() const {
+      return blit::now_us();
+    }
+    uint32_t us_diff(uint32_t start, uint32_t end) const {
+      return blit::us_diff(start, end);
+    }
+    uint32_t get_scanlines_run_time() const {
+      return scanlines_run_time;
+    }
+    uint32_t get_drawn_frames() const {
+      return drawn_frames;  
     }
 public:
 

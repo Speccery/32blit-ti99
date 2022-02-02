@@ -3,6 +3,7 @@
 // EP 2022-02-02
 
 #include "ti99.hpp"
+#include <cstring>  // memcpy
 #include "sys.hpp"
 
 // #define VERIFY comes now from cmake
@@ -56,6 +57,7 @@ cpu_t::cpu_t() {
     cart_counter = 0;
     memset(keyboard, 0xFF, sizeof(keyboard));
     keyscan = 0;
+    cpu_clk = 3000000;  // Default to 3MHz
 #ifdef VERIFY    
     verify = false;
 #endif
@@ -84,6 +86,10 @@ cpu_t::cpu_t() {
 void cpu_t::reset() {
   tms9918.init();
   tms9900_t::reset();
+  last_update_tms9918_run_cycles = 0;
+  vdp_interrupts = 0;
+  drawn_frames = 0;
+  scanlines_run_time = 0;
 }
 
 #ifdef VERIFY
@@ -429,3 +435,131 @@ uint8_t cpu_t::read_cru_bit(uint16_t addr) {
 
     return 1;
 }
+
+uint32_t cpu_t::run_cpu(uint32_t cycles_to_run, uint8_t *render_buffer, bool disasm) {
+  unsigned long start_cycles = get_cycles();
+  scanlines_run_time = 0;
+  while(get_cycles() - start_cycles < cycles_to_run && !is_stuck()) { 
+#ifdef VERIFY
+    uint16_t a = tursi_cpu.GetPC();
+    run_verify_step(false);
+    if(cpu.is_stuck()) {
+        char s[80];
+        cpu.dasm_instruction(s, a);
+        printf("STUCK %d %04X %s\n", tursi_cpu.GetCycleCount(), tursi_cpu.GetPC(), s);
+    }
+
+    // Check interrupt status every 16 instructions
+    if(!(i & 0xF) && tms9918.interrupt_pending() && (cpu.tms9901_cru & 4) ) {
+        // printf("Interrupt stuff begin %ld.\n", cpu.get_instructions());
+        uint16_t cst = cpu.st;
+        cpu.verify_begin();
+        // BUGBUG CRU masking not done yet.
+        if((tursi_cpu.GetST() & 0xF) > 1)
+            tursi_cpu.TriggerInterrupt(4);
+        cpu.verify_switch_on_reads();
+        bool b = cpu.interrupt(1);
+        cpu.verify_end();
+        // printf("Interrupt stuff end. CPU did vector: %s \n", b ? "true" : "false");
+        if(b) {
+            printf("CPU vectored to interrupt, 0x%04X.\n", cst);
+            vdp_ints++;
+        }
+    }
+#else
+    if(disasm) {
+      char s[80];
+      dasm_instruction(s, get_previous_pc());
+      printf("%ld %04X %s\n", get_instructions(), get_pc(), s);
+      if(debug_log) {
+          fprintf(debug_log, "%ld %04X %s\n", get_instructions(), get_pc(), s);
+          fflush(debug_log);
+      }
+      step(); // During disassembly go one instruction at a time.
+    } else {
+      // Run normally a bunch of instructions.
+      for(int i=0; i<32; i++)
+        step();
+    }
+
+    
+    if(!is_stuck()) { // Run this every 16 instructions
+        // We run at 50 fps
+        if(render_buffer && get_cycles() >= last_update_tms9918_run_cycles + cpu_clk/50) {
+            last_update_tms9918_run_cycles = get_cycles();
+            uint32_t start = now_us();
+            for(int y=0; y<192; y++)
+                tms9918.scanline(render_buffer, y);    
+            scanlines_run_time += us_diff(start, now_us());   // Compute amount of time not running the CPU
+            drawn_frames++;
+        }                
+        if (tms9918.interrupt_pending() && (tms9901_cru & 4) ) {
+            // VDP interrupt
+            // uint16_t cst = st;
+            bool b = interrupt(1);
+            if(b) {
+                // printf("CPU vectored to interrupt, 0x%04X.\n", cst);
+                vdp_interrupts++;
+            }
+        }
+    }
+  if(is_stuck()) {
+      // oh no, we became stuck!
+      char s[80];
+      dasm_instruction(s, get_previous_pc());
+      printf("%ld %04X %s\n", get_instructions(), get_pc(), s);
+      printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+          grom.get_read_addr(), 
+          grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+          tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+      if(debug_log) {
+          fprintf(debug_log, "CPU STUCK\n");
+          fprintf(debug_log, "%ld %04X %s\n", get_instructions(), get_pc(), s);
+          fprintf(debug_log, "GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+              grom.get_read_addr(), 
+              grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+              tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+          fflush(debug_log);
+      }
+    }
+#endif
+  }
+  return scanlines_run_time;
+}
+
+
+#ifdef VERIFY
+
+Word tursi_cpu_t::GetSafeWord(int x, int bank) {
+    return cpu.verify_read(x);
+}
+
+void wrword(Word x, Word y)
+{ 
+	x&=0xfffe;		// drop LSB
+	// now write the new data
+	// wcpubyte(x,(Byte)(y>>8));
+	// wcpubyte(x+1,(Byte)(y&0xff));
+
+    cpu.verify_write(x, y);
+}
+
+Word romword(Word x, bool rmw)
+{ 
+	x&=0xfffe;		// drop LSB
+//	// TODO: this reads the LSB first. Is this the correct order??
+// 	return((rcpubyte(x,rmw)<<8)+rcpubyte(x+1,rmw));
+    return cpu.verify_read(x);
+}
+
+void wcru(Word addr,int data) {
+    cpu.verify_write_cru_bit(addr << 1, data) ;
+}
+
+int rcru(Word addr) {
+  return cpu.verify_read_cru_bit( addr << 1);
+}
+
+#endif
+
+
