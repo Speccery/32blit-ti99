@@ -10,7 +10,7 @@ project(ti99)
 
 # Normal execution without verify below:
 set(PROJECT_SOURCE ti99.cpp ti99.hpp vdptest.c tms9900.cpp 
-  tms9918.cpp
+  tms9918.cpp sys.cpp
   994arom.c 994agrom.c invadersrom.c invadersgrom.c)
 
 

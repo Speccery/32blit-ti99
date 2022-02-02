@@ -43,7 +43,7 @@ class tms9900_t {
       stuck = false;
     }
     virtual ~tms9900_t() {}
-    void reset();
+    virtual void reset();
     bool step();      //!< step one instruction. returns true if succesful, false if became stuck.
     bool execute();   //!< execute an instruction in IR after fetch.
     int dasm_instruction(char *dst, uint16_t addr);
