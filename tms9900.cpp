@@ -101,7 +101,7 @@ const instrucion_t instructions[] = {
 // Note difference between pointer to static member function (below)
 // and pointer to a member function which would be like so:
 // uint16_t    (tms9900_t::*read_funcs[64])(uint16_t);
-uint16_t    (*tms9900_t::read_funcs[64])(uint16_t);
+tms9900_t::read_type (*tms9900_t::read_funcs[64])(uint16_t);
 unsigned long tms9900_t::cycles;
 unsigned long tms9900_t::inst_count;
 unsigned long tms9900_t::wait_cycles;
@@ -133,7 +133,7 @@ void tms9900_t::reset() {
   do_blwp(0);
 }
 
-uint16_t tms9900_t::read(unsigned addr) {
+tms9900_t::read_type tms9900_t::read(unsigned addr) {
     addr &= ~1;
     unsigned t = addr >> 10;
     return (*read_funcs[t])(addr);

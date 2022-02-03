@@ -29,6 +29,7 @@ class tms9900_t {
     static unsigned long inst_count;
     static unsigned long wait_cycles;
   protected:
+    typedef uint16_t read_type;
     uint16_t wp;  //!< workspace pointer
     uint16_t st;  //!< status register
     uint16_t pc;  //!< program counter
@@ -95,7 +96,7 @@ class tms9900_t {
       st |= !(t & 0x8000) && t ? ST14 : 0;
       st |= t == 0 ? ST13 : 0;
     }
-    inline uint16_t read_operand_word(uint16_t op) {
+    inline read_type read_operand_word(uint16_t op) {
       uint16_t sa = source_address_word(op);
       return read(sa);
     }
@@ -132,8 +133,8 @@ class tms9900_t {
 
     // Read uses a lookup table.
     // virtual uint16_t  read(uint16_t addr) = 0;
-    static uint16_t (*read_funcs[64])(uint16_t addr);
-    uint16_t read(unsigned addr);
+    static read_type (*read_funcs[64])(uint16_t addr);
+    read_type read(unsigned addr);
     virtual void      write(uint16_t addr, uint16_t data) = 0;
     virtual uint8_t   read_cru_bit(uint16_t addr) = 0;
     virtual void      write_cru_bit(uint16_t addr, uint8_t data) = 0;

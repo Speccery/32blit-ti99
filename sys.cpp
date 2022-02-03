@@ -248,58 +248,58 @@ void cpu_t::show_cpu() {
     }
 }
 
-uint16_t cpu_t::read_rom(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_rom(uint16_t addr) {
     return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
 }
 
-uint16_t cpu_t::read_dsr(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_dsr(uint16_t addr) {
     // No DSR memory for now. 0x4000
     dsr_mem_counter++;
     add_ext_cycles(4);
     return 0;
 }
-uint16_t cpu_t::read_cartridge(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_cartridge(uint16_t addr) {
     // 0x6000..0x7FFF
     cart_counter++;
     add_ext_cycles(4);
     return (rominvaders_data[addr - 0x6000] << 8) 
             |  rominvaders_data[addr - 0x6000+1];
 }
-uint16_t cpu_t::read_scrachpad(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_scrachpad(uint16_t addr) {
     return (scratchpad[addr & 0xFE] << 8) | scratchpad[(addr & 0xFE) + 1];
 }
-uint16_t cpu_t::read_soundchip(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_soundchip(uint16_t addr) {
     // 8400
     add_ext_cycles(4);
     return 0;
 }
-uint16_t cpu_t::read_vdp(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_vdp(uint16_t addr) {
     // VDP read. 0x8800
     uint16_t r = sys->tms9918.read(!!(addr & 2));
     add_ext_cycles(4);
     return r << 8; 
 }
-uint16_t cpu_t::read_vdp_write_port(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_vdp_write_port(uint16_t addr) {
     // VDP write port read 0x8C00
     add_ext_cycles(4);
     return 0;
 }
-uint16_t cpu_t::read_speech(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_speech(uint16_t addr) {
     // speech synthesizer 0x9000
     add_ext_cycles(4);
     return 0xAC00;
 }
-uint16_t cpu_t::read_grom(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_grom(uint16_t addr) {
     // 0x9800
     add_cycles(4);
     return sys->grom.read(addr) << 8;
 }
-uint16_t cpu_t::read_grom_write_port(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_grom_write_port(uint16_t addr) {
     // VDP write port read 0x9C00
     add_ext_cycles(4);
     return 0;
 }
-uint16_t cpu_t::read_unknown(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_unknown(uint16_t addr) {
     stuck = true;
     printf("reading outside of memory: 0x%4X\n", addr);
     if(debug_log) 
@@ -307,7 +307,7 @@ uint16_t cpu_t::read_unknown(uint16_t addr) {
     return 0xDEAD;
 }
 
-uint16_t cpu_t::read_all_cases(uint16_t addr) {
+tms9900_t::read_type cpu_t::read_all_cases(uint16_t addr) {
     addr &= ~1; // make the address even
 #ifdef VERIFY    
     if(verify_reads) {
