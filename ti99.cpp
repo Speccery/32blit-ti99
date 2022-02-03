@@ -227,6 +227,14 @@ void render(uint32_t time) {
         }
         screen.text("kHz: " + std::to_string(kHz), ti_font, Point(188, 220));
 
+        int func_index = 2*((time / 1000) % 16);
+        char s[80];
+        sprintf(s, "  e%02d: %8X e%02d: %8X", func_index+0, cpu.get_debug_read_funcs_entry(func_index+0),
+                                        func_index+1, cpu.get_debug_read_funcs_entry(func_index+1));
+        screen.text("debug: " + std::to_string(cpu.get_debug_read_funcs_size()) + 
+            " offset:" + std::to_string(cpu.get_debug_read_funcs_offset()) + s,
+            ti_font, Point(0, 239-8));
+
     }
 
     if(bench_result) {

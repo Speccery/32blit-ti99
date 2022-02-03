@@ -24,6 +24,19 @@ extern "C" {
     extern const unsigned char grominvaders_data[];
 }
 
+uint32_t cpu_t::vdp_interrupts;
+uint32_t cpu_t::cpu_clk;                           //!< CPU clock frequency in Hertz
+uint32_t cpu_t::last_update_tms9918_run_cycles;    //!< Last CPU cycles we did run the VDP
+uint32_t cpu_t::scanlines_run_time;                //!< us taken by last scanlines run
+uint32_t cpu_t::drawn_frames;                      //!< Number of frames handled by scanlines routine
+uint8_t  cpu_t::scratchpad[256];    
+unsigned cpu_t::dsr_mem_counter;       //!< count DSR region accesses
+unsigned cpu_t::cart_counter;
+cpu_t   *cpu_t::sys;
+FILE    *cpu_t::debug_log;
+
+
+
 void tigrom_t::write(unsigned addr, uint8_t d) {
     grom_t::write(addr, d);
     addr_complete++;
@@ -65,22 +78,25 @@ cpu_t::cpu_t() {
     debug_log = nullptr;
 
     // Init read function table.
-    for(int i=0; i<64; i++)
-        read_funcs[i] = &cpu_t::read_unknown;
+    for(int i=0; i<64; i++) {
+        // read_funcs[i] = &cpu_t::read_unknown;
+        read_funcs[i] = read_unknown;
+    }
     for(int i=0; i<8; i++) {
         // Init several 8k regions
-        read_funcs[i] = &cpu_t::read_rom;
-        read_funcs[16+i] = &cpu_t::read_dsr;
-        read_funcs[24+i] = &cpu_t::read_cartridge;
+        read_funcs[i]    = read_rom;
+        read_funcs[16+i] = read_dsr;
+        read_funcs[24+i] = read_cartridge;
     }
-    read_funcs[ 0x8300 >> 10] = &cpu_t::read_scrachpad;
-    read_funcs[ 0x8400 >> 10] = &cpu_t::read_soundchip;
-    read_funcs[ 0x8800 >> 10] = &cpu_t::read_vdp;
-    read_funcs[ 0x8C00 >> 10] = &cpu_t::read_vdp_write_port;
-    read_funcs[ 0x9000 >> 10] = &cpu_t::read_speech;
-    read_funcs[ 0x9400 >> 10] = &cpu_t::read_speech;
-    read_funcs[ 0x9800 >> 10] = &cpu_t::read_grom;
-    read_funcs[ 0x9C00 >> 10] = &cpu_t::read_grom_write_port;
+    read_funcs[ 0x8300 >> 10] = read_scrachpad;
+    read_funcs[ 0x8400 >> 10] = read_soundchip;
+    read_funcs[ 0x8800 >> 10] = read_vdp;
+    read_funcs[ 0x8C00 >> 10] = read_vdp_write_port;
+    read_funcs[ 0x9000 >> 10] = read_speech;
+    read_funcs[ 0x9400 >> 10] = read_speech;
+    read_funcs[ 0x9800 >> 10] = read_grom;
+    read_funcs[ 0x9C00 >> 10] = read_grom_write_port;
+    sys = this;
 }
 
 void cpu_t::reset() {
@@ -259,7 +275,7 @@ uint16_t cpu_t::read_soundchip(uint16_t addr) {
 }
 uint16_t cpu_t::read_vdp(uint16_t addr) {
     // VDP read. 0x8800
-    uint16_t r = tms9918.read(!!(addr & 2));
+    uint16_t r = sys->tms9918.read(!!(addr & 2));
     add_ext_cycles(4);
     return r << 8; 
 }
@@ -276,7 +292,7 @@ uint16_t cpu_t::read_speech(uint16_t addr) {
 uint16_t cpu_t::read_grom(uint16_t addr) {
     // 0x9800
     add_cycles(4);
-    return grom.read(addr) << 8;
+    return sys->grom.read(addr) << 8;
 }
 uint16_t cpu_t::read_grom_write_port(uint16_t addr) {
     // VDP write port read 0x9C00

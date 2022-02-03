@@ -25,22 +25,24 @@ struct instrucion_t {
 
 class tms9900_t {
   private:
-    unsigned long cycles;
-    unsigned long inst_count;
-    unsigned long wait_cycles;
+    static unsigned long cycles;
+    static unsigned long inst_count;
+    static unsigned long wait_cycles;
   protected:
     uint16_t wp;  //!< workspace pointer
     uint16_t st;  //!< status register
     uint16_t pc;  //!< program counter
     uint16_t ir;  //!< Current instruction.
     uint16_t prev_pc; //!< pc at the start of this instruction cycle.
-    bool stuck;
+    static bool stuck;
   public:
     tms9900_t() {
       cycles = 0;
       inst_count = 0;
       wait_cycles = 0;
       stuck = false;
+      for(int i=0; i<64; i++)
+        read_funcs[i] = nullptr;
     }
     virtual ~tms9900_t() {}
     virtual void reset();
@@ -50,7 +52,7 @@ class tms9900_t {
     bool interrupt(uint8_t level);
     unsigned long get_cycles() const;
     unsigned long get_instructions() const;
-    inline void add_ext_cycles(unsigned u) {   //!< Public function to add cycles. External interface enables computation of wait states.
+    static void add_ext_cycles(unsigned u) {   //!< Public function to add cycles. External interface enables computation of wait states.
       cycles += u;
       wait_cycles += u;
     }
@@ -58,7 +60,7 @@ class tms9900_t {
     uint16_t get_previous_pc() const { return prev_pc; }
     bool is_stuck() const   { return stuck; }
   protected:
-    void add_cycles(int n) {
+    static void add_cycles(int n) {
       cycles += n;
     }
     void do_exec0();
@@ -128,7 +130,10 @@ class tms9900_t {
       st |= c == 0 ? ST13 : 0;
     }
 
-    virtual uint16_t  read(uint16_t addr) = 0;
+    // Read uses a lookup table.
+    // virtual uint16_t  read(uint16_t addr) = 0;
+    static uint16_t (*read_funcs[64])(uint16_t addr);
+    uint16_t read(unsigned addr);
     virtual void      write(uint16_t addr, uint16_t data) = 0;
     virtual uint8_t   read_cru_bit(uint16_t addr) = 0;
     virtual void      write_cru_bit(uint16_t addr, uint8_t data) = 0;

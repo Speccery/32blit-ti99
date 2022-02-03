@@ -29,21 +29,22 @@ protected:
 
 class cpu_t : public tms9900_t {
 public:
-    unsigned dsr_mem_counter;       //!< count DSR region accesses
-    unsigned cart_counter;
     uint8_t keyboard[8];
     uint8_t keyscan;
     unsigned tms9901_cru;
 
     tms9918_t tms9918;
     tigrom_t grom;
-    uint8_t scratchpad[256];    
   protected:
-    uint32_t vdp_interrupts;
-    uint32_t cpu_clk;                           //!< CPU clock frequency in Hertz
-    uint32_t last_update_tms9918_run_cycles;    //!< Last CPU cycles we did run the VDP
-    uint32_t scanlines_run_time;                //!< us taken by last scanlines run
-    uint32_t drawn_frames;                      //!< Number of frames handled by scanlines routine
+    static uint32_t vdp_interrupts;
+    static uint32_t cpu_clk;                           //!< CPU clock frequency in Hertz
+    static uint32_t last_update_tms9918_run_cycles;    //!< Last CPU cycles we did run the VDP
+    static uint32_t scanlines_run_time;                //!< us taken by last scanlines run
+    static uint32_t drawn_frames;                      //!< Number of frames handled by scanlines routine
+    static uint8_t scratchpad[256];    
+    static unsigned dsr_mem_counter;       //!< count DSR region accesses
+    static unsigned cart_counter;
+
 public:    
 
 
@@ -80,7 +81,7 @@ public:
 
     cpu_t();
     virtual void reset();
-    void set_debug_log(FILE *f) {
+    static void set_debug_log(FILE *f) {
       debug_log = f;
     }
     void set_cpu_clk(uint32_t s) {
@@ -108,31 +109,39 @@ public:
     uint32_t get_drawn_frames() const {
       return drawn_frames;  
     }
+
+    unsigned get_debug_read_funcs_size() const {
+      return sizeof(read_funcs);
+    }
+    unsigned get_debug_read_funcs_offset() const {
+      return  (uint8_t *)read_funcs - (uint8_t *)this;
+    }
+    unsigned get_debug_read_funcs_entry(int e) const {
+      unsigned *p = (unsigned *)read_funcs;
+      return p[e];
+    }
+
 public:
 
 protected:
-  FILE *debug_log;
+  static FILE *debug_log;
+  static cpu_t *sys;
 #ifdef VERIFY
     void check_write_in_verify_buffer(uint16_t addr, uint16_t data);
     uint16_t check_read_in_verify_buffer(uint16_t addr);
 #endif    
   void show_cpu();
-  uint16_t (cpu_t::*read_funcs[64])(uint16_t addr);
-  uint16_t read_rom(uint16_t addr);
-  uint16_t read_dsr(uint16_t addr);
-  uint16_t read_cartridge(uint16_t addr);
-  uint16_t read_scrachpad(uint16_t addr);
-  uint16_t read_soundchip(uint16_t addr);
-  uint16_t read_vdp(uint16_t addr);
-  uint16_t read_vdp_write_port(uint16_t addr);
-  uint16_t read_speech(uint16_t addr);
-  uint16_t read_grom(uint16_t addr);
-  uint16_t read_grom_write_port(uint16_t addr);
-  uint16_t read_unknown(uint16_t addr);
-  virtual uint16_t read(uint16_t addr) {
-      addr &= ~1;
-      return (this->*read_funcs[addr >> 10])(addr);
-  }
+  static uint16_t read_rom(uint16_t addr);
+  static uint16_t read_dsr(uint16_t addr);
+  static uint16_t read_cartridge(uint16_t addr);
+  static uint16_t read_scrachpad(uint16_t addr);
+  static uint16_t read_soundchip(uint16_t addr);
+  static uint16_t read_vdp(uint16_t addr);
+  static uint16_t read_vdp_write_port(uint16_t addr);
+  static uint16_t read_speech(uint16_t addr);
+  static uint16_t read_grom(uint16_t addr);
+  static uint16_t read_grom_write_port(uint16_t addr);
+  static uint16_t read_unknown(uint16_t addr);
   virtual uint16_t read_all_cases(uint16_t addr);
   virtual void write_cru_bit(uint16_t addr, uint8_t data);
   virtual uint8_t read_cru_bit(uint16_t addr);
