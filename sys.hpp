@@ -99,10 +99,10 @@ public:
     }
     uint32_t run_cpu(uint32_t cycles_to_run, uint8_t *render_buffer, bool disasm);  // returns number of microseconds spent on scanline conversions
     uint32_t now_us() const {
-      return blit::now_us();
+      return ::now_us();
     }
     uint32_t us_diff(uint32_t start, uint32_t end) const {
-      return blit::us_diff(start, end);
+      return ::us_diff(start, end);
     }
     uint32_t get_scanlines_run_time() const {
       return scanlines_run_time;
@@ -121,6 +121,12 @@ public:
       unsigned *p = (unsigned *)read_funcs;
       return p[e];
     }
+    void set_framebuffer(uint8_t *p) {
+        tms9918.set_framebuffer( p );
+    }    
+
+  void print_info() const;
+  void show_cpu() const;
 
 public:
 
@@ -131,7 +137,6 @@ protected:
     void check_write_in_verify_buffer(uint16_t addr, uint16_t data);
     uint16_t check_read_in_verify_buffer(uint16_t addr);
 #endif    
-  void show_cpu();
   static tms9900_t::read_type read_rom(uint16_t addr);
   static tms9900_t::read_type read_dsr(uint16_t addr);
   static tms9900_t::read_type read_cartridge(uint16_t addr);
@@ -144,7 +149,13 @@ protected:
   static tms9900_t::read_type read_grom_write_port(uint16_t addr);
   static tms9900_t::read_type read_unknown(uint16_t addr);
   virtual tms9900_t::read_type read_all_cases(uint16_t addr);
+
+  static void write_scratchpad(uint16_t addr, tms9900_t::read_type data);
+  static void write_vdp(uint16_t addr, tms9900_t::read_type data);
+  static void static_write_all_cases(uint16_t addr, tms9900_t::read_type data);
+  void write_all_cases(uint16_t addr, tms9900_t::read_type data);
+
+
   virtual void write_cru_bit(uint16_t addr, uint8_t data);
   virtual uint8_t read_cru_bit(uint16_t addr);
-  virtual void write(uint16_t addr, uint16_t data);
 };

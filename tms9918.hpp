@@ -1,11 +1,9 @@
 // tms9918.hpp
 // implementation of the tms9918
 
-extern "C" unsigned char vdptest_data[];
-
 struct tms9918_t {
     uint8_t regs[8];
-    uint8_t framebuf[16*1024];
+    uint8_t *framebuf;
     unsigned name_table_addr;
     uint8_t     hold_reg;
     uint16_t    vram_addr;
@@ -14,6 +12,16 @@ struct tms9918_t {
     unsigned    vram_writes;    //!< debug counter
     unsigned    reg_writes;     //!< debug counter
     uint8_t     status;
+
+    // 32-blit compatible variables.
+    struct screen_t {
+        enum pixelformat_t { RGB565, RGB } format;  // RGB = RGB888
+        uint8_t *data;
+        struct bounds_t {
+            int w;
+        } bounds;
+        unsigned row_stride;
+    } screen;
 
     static const uint8_t palette_lookup[16];
     uint16_t    palette_rgb565[16];
@@ -25,20 +33,21 @@ struct tms9918_t {
             palette_rgb565[i] = unpack_rgb565(i);
             unpack_rgb888(palette_rgb888 + i*4, i);
         }
+        screen.format = screen_t::RGB565;
+        screen.bounds.w = 320;
+        screen.row_stride = 640;
+        screen.data = nullptr;
+        framebuf = nullptr;
     }
+
+    void set_framebuffer(uint8_t *p) {
+        framebuf = p;
+    }
+    uint8_t *get_framebuffer() const {
+        return framebuf;
+    }
+
     void init() {
-        /*
-        regs[0] = 0x0;
-        regs[1] = 0xE0;
-        regs[2] = 0xF0;
-        regs[3] = 0x0E;
-        regs[4] = 0xF9;
-        regs[5] = 0x86;
-        regs[6] = 0xF8;
-        regs[7] = 0xF7;
-        */
-        memcpy(framebuf, vdptest_data, 16*1024);
-        memcpy(regs, vdptest_data+16*1024, 8 );
         name_table_addr = regs[2] << 10;
         hold_reg = 0;
         write_state = false;

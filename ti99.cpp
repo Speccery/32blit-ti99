@@ -75,6 +75,8 @@ void show_pixel_RGB(uint8_t *p) {
 #endif
 }
 
+uint8_t vdp_framebuf[16*1024];
+
 uint32_t last_render_second=0; // timestamp of last full second
 uint32_t last_render_cycles=0; // cycles at last time stamp
 int      kHz = 3000;    // last computed kilohertz
@@ -94,6 +96,7 @@ uint32_t last_drawn_frames = 0;
 void init() {
     set_screen_mode(ScreenMode::hires);
     printf("About to enter cpu.reset()\n");
+    cpu.set_framebuffer(vdp_framebuf);
     cpu.reset();
     printf("Completed cpu.reset()\n");
 
@@ -184,6 +187,12 @@ void render(uint32_t time) {
             " row: "+ std::to_string(screen.row_stride),
             minimal_font, Point(5,30));    
     } else {
+        // Copy settings from 32blit screen object.
+        cpu.tms9918.screen.bounds.w = screen.bounds.w;
+        cpu.tms9918.screen.data = screen.data;
+        cpu.tms9918.screen.row_stride = screen.row_stride;
+        cpu.tms9918.screen.format = (screen.format == PixelFormat::RGB565) ? tms9918_t::screen_t::RGB565 : tms9918_t::screen_t::RGB ;
+        
         uint32_t t = cpu.tms9918.render(ti_rendered, 15);
         if(debug_show_pixel) {
             debug_show_pixel = false;

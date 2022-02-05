@@ -1,9 +1,7 @@
 // tms9918.cpp
 
-#include "32blit.hpp"
-#include <cstring>  // memcpy
+#include "ti99.hpp"
 
-using namespace blit;
 #include "tms9918.hpp"
 
 // TMS9918 colors from my tms9918.v verilog code.
@@ -41,7 +39,7 @@ uint32_t tms9918_t::render(uint8_t *fp, int yoffset) {
     } else if(w > 256) {
         x_dest_offset = (w-256)/2;
     }
-    if(screen.format == PixelFormat::RGB565) {
+    if(screen.format == screen_t::RGB565) {
         for(int y=0; y<192; y++) {
             uint8_t *p = fp + (y << 7) + x_src_offset;
             uint16_t *d = (uint16_t *)(screen.data + (yoffset+y)*screen.row_stride+x_dest_offset*2);
@@ -53,7 +51,7 @@ uint32_t tms9918_t::render(uint8_t *fp, int yoffset) {
                 p++;
             }
         }
-    } else if(screen.format == PixelFormat::RGB) {
+    } else if(screen.format == screen_t::RGB) {
         // 24 bit RGB
         for(int y=0; y<192; y++) {
             uint8_t *p = fp + (y << 7) + x_src_offset;

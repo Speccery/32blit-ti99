@@ -102,6 +102,7 @@ const instrucion_t instructions[] = {
 // and pointer to a member function which would be like so:
 // uint16_t    (tms9900_t::*read_funcs[64])(uint16_t);
 tms9900_t::read_type (*tms9900_t::read_funcs[64])(uint16_t);
+void (*tms9900_t::write_funcs[64])(uint16_t, tms9900_t::read_type);
 unsigned long tms9900_t::cycles;
 unsigned long tms9900_t::inst_count;
 unsigned long tms9900_t::wait_cycles;
@@ -133,7 +134,8 @@ void tms9900_t::reset() {
   do_blwp(0);
 }
 
-tms9900_t::read_type tms9900_t::read(unsigned addr) {
+
+RAM_ROUTINE_SECTION tms9900_t::read_type tms9900_t::read(unsigned addr) {
     addr &= ~1;
     unsigned t = addr >> 10;
     return (*read_funcs[t])(addr);
@@ -148,7 +150,7 @@ unsigned long tms9900_t::get_cycles() const {
   return cycles;
 }
 
-bool tms9900_t::step() {
+RAM_ROUTINE_SECTION bool tms9900_t::step() {
   if(stuck)
     return true;
   prev_pc = pc;
@@ -156,14 +158,14 @@ bool tms9900_t::step() {
   return execute();
 }
 
-bool tms9900_t::execute() {
+RAM_ROUTINE_SECTION bool tms9900_t::execute() {
   (this->*func[ir >> 12])();  // call the group of instructions.
   if(!stuck)
     inst_count++; 
   return !stuck;
 }
 
-void tms9900_t::do_blwp(uint16_t addr) {
+RAM_ROUTINE_SECTION void tms9900_t::do_blwp(uint16_t addr) {
   uint16_t old_wp = wp;
   wp = read(addr);
   write_reg(13, old_wp);
@@ -317,7 +319,7 @@ int tms9900_t::dasm_instruction(char *dst, uint16_t addr) {
 // Immediate  0x0F00  0x0200    0x00E0  11      LI, AI, ANDI, ORI, CI, STWP, STST, LWPI
 // System     0x0F00  0x0300    0x00E0  11      LIMI, stuck?, IDLE, RSET, RTWP, CKON, CKOF, LREX
 
-void tms9900_t::do_exec0() {
+RAM_ROUTINE_SECTION void tms9900_t::do_exec0() {
     // { 0x0A00, 0xFF00, shifts, "SLA" }, 
     // { 0x0800, 0xFF00, shifts, "SRA" }, 
     // { 0x0B00, 0xFF00, shifts, "SRC" }, 
@@ -586,7 +588,7 @@ void tms9900_t::do_exec0() {
   stuck = true;
 }
 
-void tms9900_t::do_jump(bool condition, uint16_t offset) {
+RAM_ROUTINE_SECTION void tms9900_t::do_jump(bool condition, uint16_t offset) {
   if(condition) {
     pc += offset;
     add_cycles(10);
@@ -595,7 +597,7 @@ void tms9900_t::do_jump(bool condition, uint16_t offset) {
   }
 }
 
-void tms9900_t::do_exec1() {
+RAM_ROUTINE_SECTION void tms9900_t::do_exec1() {
   uint16_t offset = (ir & 0xFF) << 1;
   offset += ir & 0x80 ? 0xFE00 : 0;   // sign extend
   switch((ir >> 8) & 0xF) {
@@ -636,13 +638,13 @@ void tms9900_t::do_exec1() {
 
   stuck = true;
 }
-void tms9900_t::do_exec2() {
+RAM_ROUTINE_SECTION void tms9900_t::do_exec2() {
   uint16_t s, d, r;
   unsigned reg;
   switch((ir >> 10) & 3) {
     case 0:     // COC st2 ST13
       add_cycles(14);
-      s = read_operand(ir & 0x3F, true);
+      s = read_operand_word(ir & 0x3F);
       d = read_reg((ir >> 6) & 0xF);
       r = (s ^ d) & s;
       st &= ~ST13;
@@ -650,7 +652,7 @@ void tms9900_t::do_exec2() {
       return;
     case 1:     // CZC st2 ST13
       add_cycles(14);
-      s = read_operand(ir & 0x3F, true);
+      s = read_operand_word(ir & 0x3F);
       d = read_reg((ir >> 6) & 0xF);
       r = (s ^ ~d) & s;
       st &= ~ST13;
@@ -658,7 +660,7 @@ void tms9900_t::do_exec2() {
       return;
     case 2:     // XOR st0-2 ST15,ST14,ST13
       add_cycles(14);
-      s = read_operand(ir & 0x3F, true);
+      s = read_operand_word(ir & 0x3F);
       reg = (ir >> 6) & 0xF;
       d = read_reg(reg);
       r = s ^ d;
@@ -735,7 +737,7 @@ void tms9900_t::do_exec3() {
     return;
   } else if((ir & 0xFC00) == 0x3800) { // MPY
     add_cycles(52);
-    const uint16_t src = read_operand(ir & 0x3F, true);
+    const uint16_t src = read_operand_word(ir & 0x3F);
     const uint16_t dst_addr = wp + (((ir >> 6) & 0xF) << 1);
     const uint16_t dst = read(dst_addr);
     unsigned result = src*dst;
@@ -743,7 +745,7 @@ void tms9900_t::do_exec3() {
     write(dst_addr+2, result & 0xFFFF);
     return;
   } else if((ir & 0xFC00) == 0x3C00) { // DIV
-    const uint16_t src = read_operand(ir & 0x3F, true);
+    const uint16_t src = read_operand_word(ir & 0x3F);
     const uint16_t dst_addr = wp + (((ir >> 6) & 0xF) << 1);
     const uint16_t dst0 = read(dst_addr);
     const uint16_t dst1 = read(dst_addr+2);
@@ -763,7 +765,7 @@ void tms9900_t::do_exec3() {
   }
   stuck = true;
 }
-void tms9900_t::do_exec4() {      // SZC
+RAM_ROUTINE_SECTION void tms9900_t::do_exec4() {      // SZC
   add_cycles(14);
   uint16_t src = read_operand_word(ir);
   uint16_t dst_addr = source_address_word(ir >> 6);
@@ -773,7 +775,7 @@ void tms9900_t::do_exec4() {      // SZC
   write(dst_addr, dst);
 }
 
-void tms9900_t::do_exec5() {       // SZCB
+RAM_ROUTINE_SECTION void tms9900_t::do_exec5() {       // SZCB
   add_cycles(14);
   uint16_t src = read_operand(ir, false);
   uint16_t dst_addr = source_address(ir >> 6, false);
@@ -784,7 +786,7 @@ void tms9900_t::do_exec5() {       // SZCB
   write_byte(dst_addr, dst);
 }
 
-void tms9900_t::do_exec6() {      // S substract
+RAM_ROUTINE_SECTION void tms9900_t::do_exec6() {      // S substract
   add_cycles(14);
   const uint16_t src = read_operand_word(ir);
   const uint16_t dst_addr = source_address_word(ir >> 6);
@@ -795,7 +797,8 @@ void tms9900_t::do_exec6() {      // S substract
   set_overflow_sub(result, dst, src);
   set_carry_sub(result);
 }
-void tms9900_t::do_exec7() {    // SB
+
+RAM_ROUTINE_SECTION void tms9900_t::do_exec7() {    // SB
   add_cycles(14);
   const uint16_t src = read_operand(ir, false);
   const uint16_t dst_addr = source_address(ir >> 6, false);
@@ -808,7 +811,7 @@ void tms9900_t::do_exec7() {    // SB
   set_carry_sub(result);
 }
 
-void tms9900_t::do_exec8() {    // C
+RAM_ROUTINE_SECTION void tms9900_t::do_exec8() {    // C
   add_cycles(14);
   const uint16_t src = read_operand_word(ir);
   const uint16_t dst_addr = source_address_word(ir >> 6);
@@ -816,7 +819,7 @@ void tms9900_t::do_exec8() {    // C
   set_flags_compare(dst, src);
 }
 
-void tms9900_t::do_exec9() {    // CB
+RAM_ROUTINE_SECTION void tms9900_t::do_exec9() {    // CB
   add_cycles(14);
   const uint16_t src = read_operand(ir, false);
   const uint16_t dst_addr = source_address(ir >> 6, false);
@@ -826,7 +829,7 @@ void tms9900_t::do_exec9() {    // CB
   do_parity(src);
 }
 
-void tms9900_t::do_execA() {    // A add
+RAM_ROUTINE_SECTION void tms9900_t::do_execA() {    // A add
   add_cycles(14);
   const uint16_t src = read_operand_word(ir);
   const uint16_t dst_addr = source_address_word(ir >> 6);
@@ -837,7 +840,7 @@ void tms9900_t::do_execA() {    // A add
   set_overflow_add(result, dst, src);
   set_carry_add(result);
 }
-void tms9900_t::do_execB() {    // AB add bytes
+RAM_ROUTINE_SECTION void tms9900_t::do_execB() {    // AB add bytes
   add_cycles(14);
   const uint16_t src = read_operand(ir, false);
   const uint16_t dst_addr = source_address(ir >> 6, false);
@@ -850,7 +853,7 @@ void tms9900_t::do_execB() {    // AB add bytes
   set_overflow_add(result, dst, src);
   set_carry_add(result);
 }
-void tms9900_t::do_execC() {    // MOV
+RAM_ROUTINE_SECTION void tms9900_t::do_execC() {    // MOV
   add_cycles(14);
   // Dual operand cycle.
   // Source operand, bits 5..0
@@ -861,8 +864,8 @@ void tms9900_t::do_execC() {    // MOV
   write(dst_addr, src);
 }
 
-void tms9900_t::do_execD() {    // MOVB
-add_cycles(14);
+RAM_ROUTINE_SECTION void tms9900_t::do_execD() {    // MOVB
+  add_cycles(14);
   // Dual operand cycle.
   // Source operand, bits 5..0
   uint16_t src = read_operand(ir, false);
@@ -872,7 +875,7 @@ add_cycles(14);
   write_byte(dst_addr, src);
 }
 
-void tms9900_t::do_execE() {      // SOC
+RAM_ROUTINE_SECTION void tms9900_t::do_execE() {      // SOC
   add_cycles(14);
   uint16_t src = read_operand_word(ir);
   uint16_t dst_addr = source_address_word(ir >> 6);
@@ -882,7 +885,7 @@ void tms9900_t::do_execE() {      // SOC
   write(dst_addr, dst);
 }
 
-void tms9900_t::do_execF() {      // SOCB
+RAM_ROUTINE_SECTION void tms9900_t::do_execF() {      // SOCB
   add_cycles(14);
   uint16_t src = read_operand(ir, false);
   uint16_t dst_addr = source_address(ir >> 6, false);
@@ -893,7 +896,7 @@ void tms9900_t::do_execF() {      // SOCB
   write_byte(dst_addr, dst);
 }
 
-void tms9900_t::write_byte(uint16_t dst_addr, uint16_t dst) {
+RAM_ROUTINE_SECTION void tms9900_t::write_byte(uint16_t dst_addr, uint16_t dst) {
   // Write the destination byte. Requires read modify write cycle.
   // High byte of dst is our byte to write.
   uint16_t d = read(dst_addr);
@@ -909,7 +912,7 @@ void tms9900_t::write_byte(uint16_t dst_addr, uint16_t dst) {
   write(dst_addr, d);
 }
 
-uint16_t tms9900_t::read_byte(uint16_t addr) {
+RAM_ROUTINE_SECTION uint16_t tms9900_t::read_byte(uint16_t addr) {
   uint16_t d = read(addr);
   // The value returned is always given in the high byte.
   if(addr & 1) {
@@ -920,14 +923,14 @@ uint16_t tms9900_t::read_byte(uint16_t addr) {
   }
 }
 
-void tms9900_t::do_parity(uint16_t src) {
+RAM_ROUTINE_SECTION void tms9900_t::do_parity(uint16_t src) {
   // Byte operations set parity from high byte of src.
   st &= ~ST10;
   uint16_t paritys = (src >> 7) ^ (src >> 6) ^ (src >> 5) ^(src >> 4) ^ (src >> 3) ^ (src >> 2) ^ (src >> 1) ^ src;
   st |= 0x100 & paritys ? ST10 : 0;
 }
 
-uint16_t tms9900_t::read_operand(uint16_t op, bool word_operation) {
+RAM_ROUTINE_SECTION uint16_t tms9900_t::read_operand(uint16_t op, bool word_operation) {
   uint16_t sa = source_address(op, word_operation);
   // Do byte selection.
   if(word_operation)
@@ -943,7 +946,7 @@ uint16_t tms9900_t::read_operand(uint16_t op, bool word_operation) {
   }
 }
 
-uint16_t tms9900_t::source_address_word(uint16_t op) {
+RAM_ROUTINE_SECTION uint16_t tms9900_t::source_address_word(uint16_t op) {
   op &= 0x3F;
   switch(op & 0x30) {
     case 0x00: return wp+((op & 0xF) << 1); // workspace register
@@ -973,7 +976,7 @@ uint16_t tms9900_t::source_address_word(uint16_t op) {
   return 0; // never executed
 }
 
-uint16_t tms9900_t::source_address(uint16_t op, bool word_operation) {
+RAM_ROUTINE_SECTION uint16_t tms9900_t::source_address(uint16_t op, bool word_operation) {
   op &= 0x3F;
   switch(op & 0x30) {
     case 0x00: return wp+((op & 0xF) << 1); // workspace register

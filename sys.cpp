@@ -43,13 +43,13 @@ void tigrom_t::write(unsigned addr, uint8_t d) {
     addr_complete++;
     if(addr_complete == 2) {
         if(!(selected_groms & (1 << sel))) {
-            printf("GROM sel=%d offset=0x%04X selected for the first time.\n", sel, offset);
+            printf("GROM sel=%d offset=0x%04X selected for the first time.\r\n", sel, offset);
             selected_groms |= 1 << sel;
             show_cpu = true;
         }
         if(sel >= 4) {
-            printf("GROM sel=%d offset=0x%04X\n", sel, offset);
-            show_cpu = true;
+            // printf("GROM sel=%d offset=0x%04X\r\n", sel, offset);
+            // show_cpu = true;
         }
     } 
 }
@@ -62,7 +62,7 @@ uint8_t tigrom_t::read_mem(uint16_t addr) {
         return grom994a_data[addr];
     if(addr < 0x8000)
         return grominvaders_data[addr - 0x6000];
-    printf("Reading outside valid GROM area 0x%04X.\n", addr);
+    // printf("Reading outside valid GROM area 0x%04X.\r\n", addr);
     return 0;
 }
 
@@ -82,6 +82,7 @@ cpu_t::cpu_t() {
     for(int i=0; i<64; i++) {
         // read_funcs[i] = &cpu_t::read_unknown;
         read_funcs[i] = read_unknown;
+        write_funcs[i] = static_write_all_cases;
     }
     for(int i=0; i<8; i++) {
         // Init several 8k regions
@@ -97,6 +98,9 @@ cpu_t::cpu_t() {
     read_funcs[ 0x9400 >> 10] = read_speech;
     read_funcs[ 0x9800 >> 10] = read_grom;
     read_funcs[ 0x9C00 >> 10] = read_grom_write_port;
+
+    write_funcs[0x8300 >> 10] = write_scratchpad;
+    write_funcs[0x8c00 >> 10] = write_vdp;
     sys = this;
 }
 
@@ -234,8 +238,9 @@ uint16_t cpu_t::check_read_in_verify_buffer(uint16_t addr) {
 }
 #endif
 
-void cpu_t::show_cpu() {
-    printf("%6ld PC:%04X ST:%04X WP:%04X GROM:%04X %02X (%04X) ", 
+void cpu_t::show_cpu() const {
+    printf("%08lX %6ld PC:%04X ST:%04X WP:%04X GROM:%04X %02X (%04X) ", 
+        (unsigned long)scratchpad,
         get_instructions(),
         prev_pc, st, wp, grom.get_read_addr(),
         grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
@@ -249,7 +254,15 @@ void cpu_t::show_cpu() {
     }
 }
 
-tms9900_t::read_type cpu_t::read_rom(uint16_t addr) {
+void cpu_t::print_info() const  { 
+    printf("GROM_addr 0x%04X 0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\r\n", 
+        grom.get_read_addr(), 
+        grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
+        tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);
+}
+
+
+RAM_ROUTINE_SECTION tms9900_t::read_type cpu_t::read_rom(uint16_t addr) {
     return (rom994a_data[addr] << 8) | rom994a_data[addr+1];
 }
 
@@ -266,7 +279,7 @@ tms9900_t::read_type cpu_t::read_cartridge(uint16_t addr) {
     return (rominvaders_data[addr - 0x6000] << 8) 
             |  rominvaders_data[addr - 0x6000+1];
 }
-tms9900_t::read_type cpu_t::read_scratchpad(uint16_t addr) {
+RAM_ROUTINE_SECTION tms9900_t::read_type cpu_t::read_scratchpad(uint16_t addr) {
     return scratchpad[0x7F & (addr >> 1)];
     // return (scratchpad[addr & 0xFE] << 8) | scratchpad[(addr & 0xFE) + 1];
 }
@@ -303,9 +316,9 @@ tms9900_t::read_type cpu_t::read_grom_write_port(uint16_t addr) {
 }
 tms9900_t::read_type cpu_t::read_unknown(uint16_t addr) {
     stuck = true;
-    printf("reading outside of memory: 0x%4X\n", addr);
+    printf("reading outside of memory: 0x%4X\r\n", addr);
     if(debug_log) 
-      fprintf(debug_log, "reading outside of memory: 0x%4X\n", addr);
+      fprintf(debug_log, "reading outside of memory: 0x%4X\r\n", addr);
     return 0xDEAD;
 }
 
@@ -361,9 +374,9 @@ tms9900_t::read_type cpu_t::read_all_cases(uint16_t addr) {
         read_value =  0xDEAD;
     } */ else {
         stuck = true;
-        printf("reading outside of memory: 0x%4X\n", addr);
+        printf("reading outside of memory: 0x%4X\r\n", addr);
         if(debug_log) 
-          fprintf(debug_log, "reading outside of memory: 0x%4X\n", addr);
+          fprintf(debug_log, "reading outside of memory: 0x%4X\r\n", addr);
     }
 #ifdef VERIFY    
     if(verify) {
@@ -374,7 +387,20 @@ tms9900_t::read_type cpu_t::read_all_cases(uint16_t addr) {
     return read_value;
 }
 
-void cpu_t::write(uint16_t addr, uint16_t data) {
+RAM_ROUTINE_SECTION void cpu_t::write_scratchpad(uint16_t addr, tms9900_t::read_type data) {
+    scratchpad[0x7F & (addr >> 1)] = data;
+}
+
+void cpu_t::write_vdp(uint16_t addr, tms9900_t::read_type data) {
+    sys->tms9918.write(!!(addr & 2), data >> 8);
+    sys->add_ext_cycles(4);
+}
+
+void cpu_t::static_write_all_cases(uint16_t addr, tms9900_t::read_type data) {
+    sys->write_all_cases(addr, data);
+} 
+
+void cpu_t::write_all_cases(uint16_t addr, tms9900_t::read_type data) {
     addr &= ~1; // make the addres even
 
 #ifdef VERIFY
@@ -407,10 +433,10 @@ void cpu_t::write(uint16_t addr, uint16_t data) {
           add_ext_cycles(4);
       } else {
           stuck = true;
-          printf("writing outside of memory: 0x%04X\n", addr);
+          printf("writing outside of memory: 0x%04X\r\n", addr);
       }
       if(debug_log) {
-          fprintf(debug_log, "[0x%04X]=0x%04X, GROM addr 0x%04X *0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\n", 
+          fprintf(debug_log, "[0x%04X]=0x%04X, GROM addr 0x%04X *0x%02X VRAM writes %d VDP writes %d VRAM addr 0x%04X reg writes %d\r\n", 
             addr, data, grom.get_read_addr(), 
             grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
                 tms9918.vram_writes, tms9918.vdp_writes, tms9918.vram_addr, tms9918.reg_writes);

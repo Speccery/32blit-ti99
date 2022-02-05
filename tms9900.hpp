@@ -4,6 +4,15 @@
 // 
 #include <sys/types.h>
 
+
+// #define RAM_ROUTINE_SECTION __attribute__((long_call, section(".data.$RAM2")))
+#ifdef STRANGECART
+#define RAM_ROUTINE_SECTION __attribute__((long_call, section(".data")))  // STRANGECART
+#else
+#define RAM_ROUTINE_SECTION  // 32BLIT
+#endif
+
+
 const uint16_t ST15 = 1 << 15;
 const uint16_t ST14 = 1 << 14;
 const uint16_t ST13 = 1 << 13;
@@ -42,8 +51,10 @@ class tms9900_t {
       inst_count = 0;
       wait_cycles = 0;
       stuck = false;
-      for(int i=0; i<64; i++)
+      for(int i=0; i<64; i++) {
         read_funcs[i] = nullptr;
+        write_funcs[i] = nullptr;
+      }
     }
     virtual ~tms9900_t() {}
     virtual void reset();
@@ -135,7 +146,10 @@ class tms9900_t {
     // virtual uint16_t  read(uint16_t addr) = 0;
     static read_type (*read_funcs[64])(uint16_t addr);
     read_type read(unsigned addr);
-    virtual void      write(uint16_t addr, uint16_t data) = 0;
+    static  void (*write_funcs[64])(uint16_t addr, read_type data);
+    inline void  write(uint16_t addr, read_type data) {
+      (*write_funcs[addr >> 10])(addr, data);
+    }
     virtual uint8_t   read_cru_bit(uint16_t addr) = 0;
     virtual void      write_cru_bit(uint16_t addr, uint8_t data) = 0;
 
