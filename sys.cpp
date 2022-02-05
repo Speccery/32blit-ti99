@@ -1,5 +1,6 @@
 // sys.cpp
-// TI-99/4A system module. The idea is that this one is independent of the target platform.
+// TI-99/4A emulator system module. 
+// The idea is that this one is independent of the target platform.
 // EP 2022-02-02
 
 #include "ti99.hpp"
