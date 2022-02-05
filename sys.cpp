@@ -29,7 +29,7 @@ uint32_t cpu_t::cpu_clk;                           //!< CPU clock frequency in H
 uint32_t cpu_t::last_update_tms9918_run_cycles;    //!< Last CPU cycles we did run the VDP
 uint32_t cpu_t::scanlines_run_time;                //!< us taken by last scanlines run
 uint32_t cpu_t::drawn_frames;                      //!< Number of frames handled by scanlines routine
-uint8_t  cpu_t::scratchpad[256];    
+uint16_t cpu_t::scratchpad[128];    
 unsigned cpu_t::dsr_mem_counter;       //!< count DSR region accesses
 unsigned cpu_t::cart_counter;
 cpu_t   *cpu_t::sys;
@@ -88,7 +88,7 @@ cpu_t::cpu_t() {
         read_funcs[16+i] = read_dsr;
         read_funcs[24+i] = read_cartridge;
     }
-    read_funcs[ 0x8300 >> 10] = read_scrachpad;
+    read_funcs[ 0x8300 >> 10] = read_scratchpad;
     read_funcs[ 0x8400 >> 10] = read_soundchip;
     read_funcs[ 0x8800 >> 10] = read_vdp;
     read_funcs[ 0x8C00 >> 10] = read_vdp_write_port;
@@ -238,12 +238,12 @@ void cpu_t::show_cpu() {
         get_instructions(),
         prev_pc, st, wp, grom.get_read_addr(),
         grom.get_read_addr() < 0x6000 ? grom994a_data[grom.get_read_addr()-1] : 0xEE,
-        (scratchpad[0x72] << 8) | scratchpad[0x73]
+        (scratchpad[0x72 >> 1] >> 8) | (scratchpad[0x73 >> 1] & 0xFF)
         );
     // show GROM stack entries.
-    uint8_t p = scratchpad[0x73];
+    uint8_t p = scratchpad[0x73 >> 1] & 0xFF;
     for(uint8_t u=0x7E; u<p; u+=2) {
-        uint16_t entry = (scratchpad[u] << 8) | scratchpad[u+1];
+        uint16_t entry = scratchpad[u >> 1]; // (scratchpad[u] << 8) | scratchpad[u+1];
         printf("%04X ", entry);
     }
 }
@@ -265,8 +265,9 @@ tms9900_t::read_type cpu_t::read_cartridge(uint16_t addr) {
     return (rominvaders_data[addr - 0x6000] << 8) 
             |  rominvaders_data[addr - 0x6000+1];
 }
-tms9900_t::read_type cpu_t::read_scrachpad(uint16_t addr) {
-    return (scratchpad[addr & 0xFE] << 8) | scratchpad[(addr & 0xFE) + 1];
+tms9900_t::read_type cpu_t::read_scratchpad(uint16_t addr) {
+    return scratchpad[0x7F & (addr >> 1)];
+    // return (scratchpad[addr & 0xFE] << 8) | scratchpad[(addr & 0xFE) + 1];
 }
 tms9900_t::read_type cpu_t::read_soundchip(uint16_t addr) {
     // 8400
@@ -329,7 +330,7 @@ tms9900_t::read_type cpu_t::read_all_cases(uint16_t addr) {
         cart_counter++;
         add_ext_cycles(4);
     } else if(addr >= 0x8300 && addr <0x8400) {
-        read_value =  (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
+        read_value =  read_scratchpad(addr); // (scratchpad[addr - 0x8300] << 8) | scratchpad[addr - 0x8300 + 1];
     } else if(addr >= 0x8400 && addr< 0x8800) {
         // sound chip access
         add_ext_cycles(4);
@@ -380,8 +381,9 @@ void cpu_t::write(uint16_t addr, uint16_t data) {
         check_write_in_verify_buffer(addr, data);
 #endif
       if(addr >= 0x8300 && addr < 0x8400) {
-          scratchpad[addr - 0x8300] = data >> 8;
-          scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
+          scratchpad[0x7F & (addr >> 1)] = data;
+          // scratchpad[addr - 0x8300] = data >> 8;
+          // scratchpad[addr - 0x8300 + 1] = data;  // 8 low bits
       } else if(addr >= 0x8C00 && addr < 0x9000) {
         // VDP write
         tms9918.write(!!(addr & 2), data >> 8);

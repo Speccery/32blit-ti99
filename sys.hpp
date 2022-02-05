@@ -41,7 +41,7 @@ public:
     static uint32_t last_update_tms9918_run_cycles;    //!< Last CPU cycles we did run the VDP
     static uint32_t scanlines_run_time;                //!< us taken by last scanlines run
     static uint32_t drawn_frames;                      //!< Number of frames handled by scanlines routine
-    static uint8_t scratchpad[256];    
+    static uint16_t scratchpad[128];    
     static unsigned dsr_mem_counter;       //!< count DSR region accesses
     static unsigned cart_counter;
 
@@ -126,7 +126,7 @@ public:
 protected:
   static FILE *debug_log;
   static cpu_t *sys;
-#ifdef VERIFY
+#ifdef VERIFY 
     void check_write_in_verify_buffer(uint16_t addr, uint16_t data);
     uint16_t check_read_in_verify_buffer(uint16_t addr);
 #endif    
@@ -134,7 +134,7 @@ protected:
   static tms9900_t::read_type read_rom(uint16_t addr);
   static tms9900_t::read_type read_dsr(uint16_t addr);
   static tms9900_t::read_type read_cartridge(uint16_t addr);
-  static tms9900_t::read_type read_scrachpad(uint16_t addr);
+  static tms9900_t::read_type read_scratchpad(uint16_t addr);
   static tms9900_t::read_type read_soundchip(uint16_t addr);
   static tms9900_t::read_type read_vdp(uint16_t addr);
   static tms9900_t::read_type read_vdp_write_port(uint16_t addr);
