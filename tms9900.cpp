@@ -168,6 +168,7 @@ RAM_ROUTINE_SECTION bool tms9900_t::execute() {
 RAM_ROUTINE_SECTION void tms9900_t::do_blwp(uint16_t addr) {
   uint16_t old_wp = wp;
   wp = read(addr);
+  set_pwp_cycles();
   write_reg(13, old_wp);
   write_reg(14, pc);
   write_reg(15, st);
@@ -546,6 +547,7 @@ RAM_ROUTINE_SECTION void tms9900_t::do_exec0() {
         add_cycles(10);
         uint16_t imm = next();
         wp = imm;
+        set_pwp_cycles();
         return;
       }
     }
@@ -573,6 +575,7 @@ RAM_ROUTINE_SECTION void tms9900_t::do_exec0() {
         pc = read(wp + (14 << 1));
         st = read(wp + (15 << 1));
         wp = read(wp + (13 << 1));
+        set_pwp_cycles();
         return;
       }
       case 6: // CKOF
@@ -975,6 +978,40 @@ RAM_ROUTINE_SECTION uint16_t tms9900_t::source_address_word(uint16_t op) {
   }  
   return 0; // never executed
 }
+
+/*
+RAM_ROUTINE_SECTION tms9900_t::read_type tms9900_t::read_operand_word(uint16_t op) {
+  // uint16_t sa = source_address_word(op);
+  // return read(sa);
+  op &= 0x3F;
+  switch(op & 0x30) {
+    case 0x00: return read_reg(op & 0xF); // workspace register
+    case 0x10: 
+      add_cycles(4);
+      return read(read_reg(op & 0xF));   // workspace register indirect
+    case 0x20: {
+      // symbolic or indexed mode.
+      add_cycles(8);
+      uint16_t t = next();
+      if((op & 0xF) == 0) {
+        // symbolic addressing mode.
+        return read(t);
+      } else {
+        // Indexed addressing mode.
+        return read(t + read_reg(op & 0xF));
+      }
+    }
+    case 0x30: {
+      // workspace register indirect auto increment
+      add_cycles(8);
+      uint16_t t = read_reg(op & 0xF);
+      write_reg(op & 0xF, t + 2);
+      return read(t);
+    }
+  }  
+  return 0;  
+}
+*/
 
 RAM_ROUTINE_SECTION uint16_t tms9900_t::source_address(uint16_t op, bool word_operation) {
   op &= 0x3F;

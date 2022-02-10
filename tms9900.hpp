@@ -45,6 +45,8 @@ class tms9900_t {
     uint16_t ir;  //!< Current instruction.
     uint16_t prev_pc; //!< pc at the start of this instruction cycle.
     static bool stuck;
+    uint16_t *pwp;  //!< pointer to workspace [in RAM]
+    unsigned rwp_cycles;  //!< Number of cycles required per workspace register read through pwp.
   public:
     tms9900_t() {
       cycles = 0;
@@ -55,6 +57,8 @@ class tms9900_t {
         read_funcs[i] = nullptr;
         write_funcs[i] = nullptr;
       }
+      pwp = nullptr;
+      rwp_cycles = 0;
     }
     virtual ~tms9900_t() {}
     virtual void reset();
@@ -75,6 +79,7 @@ class tms9900_t {
     static void add_cycles(int n) {
       cycles += n;
     }
+    virtual void set_pwp_cycles() = 0; // set pwp and rwp_cycles based on wp value.
     void do_exec0();
     void do_jump(bool condition, uint16_t offset);
     void do_exec1();
@@ -109,7 +114,7 @@ class tms9900_t {
     }
     inline read_type read_operand_word(uint16_t op) {
       uint16_t sa = source_address_word(op);
-      return read(sa);
+      return read(sa);      
     }
     void do_parity(uint16_t src);
     void write_byte(uint16_t dst_addr, uint16_t dst);
@@ -158,7 +163,8 @@ class tms9900_t {
       write(wp+(r << 1), val);
     }
     inline uint16_t read_reg(unsigned r) {
-      return read(wp+(r << 1));
+      add_cycles(rwp_cycles);
+      return pwp[r];
     }
     char *dasm_addr_mode(char *s, unsigned mode, int *len);
     int dasm_one(char *buf, int state_in, int opcode);

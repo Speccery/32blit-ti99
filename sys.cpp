@@ -572,6 +572,32 @@ uint32_t cpu_t::run_cpu(uint32_t cycles_to_run, uint8_t *render_buffer, bool dis
   return scanlines_run_time;
 }
 
+void cpu_t::set_pwp_cycles() {
+    // compute pwp pointer and rwp_cycles based on current value of wp.
+    if(wp < 0x2000) {
+        pwp = (uint16_t *)&rom994a_data[wp*2];  // BUGBUG endianess
+        rwp_cycles = 0; // 16-bit ROM. No penalty.
+    } else if(wp < 0x4000) {
+        rwp_cycles = 4;
+        pwp = nullptr;  // unexpanded TI-99/4A: no memory expansion, can't set wp to that area.
+    } else if(wp < 0x6000) {
+        // DSR ROM
+        rwp_cycles = 4;
+        pwp = nullptr;  // unexpanded TI-99/4A: no memory expansion, can't set wp to that area.
+    } else if(wp < 0x8000) {
+        rwp_cycles = 4;
+        pwp = (uint16_t *)&rominvaders_data[(wp-0x6000)*2];  // BUGBUG endianess
+    } else if(wp < 0x8400) {
+        // Scratchpad. 16-bit access, no waits.
+        pwp = &scratchpad[0x7F & (wp >> 1)];
+        rwp_cycles = 0;
+    } else {
+        // Well anywhere else on unexpanded TI is bad.
+        // Except VDP write area.
+        rwp_cycles = 4;
+        pwp = nullptr;
+    }
+}
 
 #ifdef VERIFY
 

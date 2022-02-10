@@ -131,6 +131,7 @@ public:
 public:
 
 protected:
+  virtual void set_pwp_cycles();
   static FILE *debug_log;
   static cpu_t *sys;
 #ifdef VERIFY 
