@@ -107,6 +107,8 @@ unsigned long tms9900_t::cycles;
 unsigned long tms9900_t::inst_count;
 unsigned long tms9900_t::wait_cycles;
 bool          tms9900_t::stuck;
+uint16_t     *tms9900_t::pwp;         //!< pointer to workspace [in RAM]
+unsigned      tms9900_t::rwp_cycles;  //!< Number of cycles required per workspace register read through pwp.
 
 
 

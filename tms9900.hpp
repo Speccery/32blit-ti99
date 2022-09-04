@@ -45,8 +45,8 @@ class tms9900_t {
     uint16_t ir;  //!< Current instruction.
     uint16_t prev_pc; //!< pc at the start of this instruction cycle.
     static bool stuck;
-    uint16_t *pwp;  //!< pointer to workspace [in RAM]
-    unsigned rwp_cycles;  //!< Number of cycles required per workspace register read through pwp.
+    static uint16_t *pwp;  //!< pointer to workspace [in RAM]
+    static unsigned rwp_cycles;  //!< Number of cycles required per workspace register read through pwp.
   public:
     tms9900_t() {
       cycles = 0;
@@ -162,7 +162,7 @@ class tms9900_t {
     inline void write_reg(unsigned r, uint16_t val) {
       write(wp+(r << 1), val);
     }
-    inline uint16_t read_reg(unsigned r) {
+    inline static uint16_t read_reg(unsigned r) {
       add_cycles(rwp_cycles);
       return pwp[r];
     }
