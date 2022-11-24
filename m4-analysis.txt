@@ -1,0 +1,98 @@
+m4-analysis.text
+
+** scratchpad inside the class
+Disassembly of section .text._ZN5cpu_t14read_scrachpadEt:
+
+00000000 <_ZN5cpu_t14read_scrachpadEt>:
+   0:	f001 01fe 	and.w	r1, r1, #254	; 0xfe
+   4:	f244 1250 	movw	r2, #16720	; 0x4150
+   8:	f244 1351 	movw	r3, #16721	; 0x4151
+   c:	4401      	add	r1, r0
+   e:	5c88      	ldrb	r0, [r1, r2]
+  10:	5ccb      	ldrb	r3, [r1, r3]
+  12:	ea43 2000 	orr.w	r0, r3, r0, lsl #8
+  16:	4770      	bx	lr
+
+**scratchpad outside the class
+  Disassembly of section .text._ZN5cpu_t14read_scrachpadEt:
+
+00000000 <_ZN5cpu_t14read_scrachpadEt>:
+   0:	4b05      	ldr	r3, [pc, #20]	; (18 <_ZN5cpu_t14read_scrachpadEt+0x18>)
+   2:	f001 01fe 	and.w	r1, r1, #254	; 0xfe
+   6:	4a05      	ldr	r2, [pc, #20]	; (1c <_ZN5cpu_t14read_scrachpadEt+0x1c>)
+   8:	447b      	add	r3, pc
+   a:	589b      	ldr	r3, [r3, r2]
+   c:	185a      	adds	r2, r3, r1
+   e:	5c58      	ldrb	r0, [r3, r1]
+  10:	7853      	ldrb	r3, [r2, #1]
+  12:	ea43 2000 	orr.w	r0, r3, r0, lsl #8
+  16:	4770      	bx	lr
+  18:	0000000c 	.word	0x0000000c
+  1c:	00000000 	.word	0x00000000
+
+Conclusion: for M4, keep the scratchpad inside the class.
+
+
+
+
+
+  virtual uint16_t read(uint16_t addr) {
+      addr &= ~1;
+      return (this->*read_funcs[addr >> 10])(addr);
+  }
+
+Why is this so long?
+
+00000000 <_ZN5cpu_t4readEt>:
+   0:	f64f 73fe 	movw	r3, #65534	; 0xfffe
+   4:	400b      	ands	r3, r1
+   6:	129a      	asrs	r2, r3, #10
+   8:	b430      	push	{r4, r5}
+   a:	eb00 02c2 	add.w	r2, r0, r2, lsl #3
+   e:	f244 256c 	movw	r5, #17004	; 0x426c
+  12:	f244 2468 	movw	r4, #17000	; 0x4268
+  16:	5951      	ldr	r1, [r2, r5]
+  18:	5912      	ldr	r2, [r2, r4]
+  1a:	104c      	asrs	r4, r1, #1
+  1c:	07c9      	lsls	r1, r1, #31
+  1e:	eb00 0504 	add.w	r5, r0, r4
+  22:	d501      	bpl.n	28 <_ZN5cpu_t4readEt+0x28>
+  24:	5901      	ldr	r1, [r0, r4]
+  26:	588a      	ldr	r2, [r1, r2]
+  28:	4628      	mov	r0, r5
+  2a:	4619      	mov	r1, r3
+  2c:	bc30      	pop	{r4, r5}
+  2e:	4710      	bx	r2
+
+Moved the above code to the tms9900_t class. It is still very long. 
+What the hell is the conditional expression here?
+Let's see. R1 = addr, the input parameter.
+
+
+ASRS R4, R1, #1 ; R4=arithmetic shift right of the address by 1. i.e. signed division by 2
+LSLS R1, R1, #31 ; R1=logical shift left by 31
+ADD.W R5,R4,R0  ; R0=this pointer. (I assume).
+BPL.N 20        ; Branch if positive or zero.
+  12:	104c      	asrs	r4, r1, #1
+  14:	07c9      	lsls	r1, r1, #31
+  16:	eb00 0504 	add.w	r5, r0, r4
+
+
+
+  00000000 <_ZN9tms9900_t4readEt>:
+   0:	f64f 73fe 	movw	r3, #65534	; 0xfffe
+   4:	400b      	ands	r3, r1
+   6:	129a      	asrs	r2, r3, #10
+   8:	eb00 02c2 	add.w	r2, r0, r2, lsl #3
+   c:	e9d2 2127 	ldrd	r2, r1, [r2, #156]	; 0x9c - offset to the read_funcs table I assume.
+  10:	b430      	push	{r4, r5}
+  12:	104c      	asrs	r4, r1, #1
+  14:	07c9      	lsls	r1, r1, #31
+  16:	eb00 0504 	add.w	r5, r0, r4
+  1a:	d501      	bpl.n	20 <_ZN9tms9900_t4readEt+0x20>
+  1c:	5901      	ldr	r1, [r0, r4]
+  1e:	588a      	ldr	r2, [r1, r2]
+  20:	4628      	mov	r0, r5
+  22:	4619      	mov	r1, r3
+  24:	bc30      	pop	{r4, r5}
+  26:	4710      	bx	r2

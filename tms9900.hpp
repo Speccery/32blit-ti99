@@ -3,7 +3,7 @@
 // Erik Piehl (C) 2021-01-28
 // 
 #include <sys/types.h>
-
+#include <stdint.h>   // uint16_t on certain platforms
 
 // #define RAM_ROUTINE_SECTION __attribute__((long_call, section(".data.$RAM2")))
 #ifdef STRANGECART
@@ -25,7 +25,7 @@ enum ins9900 { dual_op_mult_mult, dual_op_mult_wr, xop, single_op,
     cru_multi_bit, cru_single_bit, jumps, shifts, immediates,
     internal_immediates, internal_store, rtwp };
 
-struct instrucion_t {
+struct instruction_t {
     unsigned bin;
     unsigned mask;
     enum ins9900 type;

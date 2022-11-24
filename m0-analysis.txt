@@ -1,0 +1,296 @@
+M0 old implementation (bytewide scratchpad)
+
+A shitload of code to deal with 
+  virtual uint16_t read(uint16_t addr) {
+      addr &= ~1;
+      return (this->*read_funcs[addr >> 10])(addr);
+  }
+
+00000000 <_ZN5cpu_t4readEt>:
+   0:	b570      	push	{r4, r5, r6, lr}
+   2:	2401      	movs	r4, #1
+   4:	43a1      	bics	r1, r4
+   6:	128b      	asrs	r3, r1, #10
+   8:	00db      	lsls	r3, r3, #3
+   a:	4a06      	ldr	r2, [pc, #24]	; (24 <_ZN5cpu_t4readEt+0x24>)
+   c:	18c3      	adds	r3, r0, r3
+   e:	589a      	ldr	r2, [r3, r2]
+  10:	1055      	asrs	r5, r2, #1
+  12:	1940      	adds	r0, r0, r5
+  14:	4d04      	ldr	r5, [pc, #16]	; (28 <_ZN5cpu_t4readEt+0x28>)
+  16:	595b      	ldr	r3, [r3, r5]
+  18:	4214      	tst	r4, r2
+  1a:	d001      	beq.n	20 <_ZN5cpu_t4readEt+0x20>
+  1c:	6802      	ldr	r2, [r0, #0]
+  1e:	58d3      	ldr	r3, [r2, r3]
+  20:	4798      	blx	r3
+  22:	bd70      	pop	{r4, r5, r6, pc}
+  24:	0000426c 	.word	0x0000426c
+  28:	00004268 	.word	0x00004268
+
+*** below with 8-bit scratchpad inside the class
+00000000 <_ZN5cpu_t14read_scrachpadEt>:
+   0:	23fe      	movs	r3, #254	; 0xfe
+   2:	4a06      	ldr	r2, [pc, #24]	; (1c <_ZN5cpu_t14read_scrachpadEt+0x1c>)
+   4:	400b      	ands	r3, r1
+   6:	4694      	mov	ip, r2
+   8:	18c0      	adds	r0, r0, r3
+   a:	4b05      	ldr	r3, [pc, #20]	; (20 <_ZN5cpu_t14read_scrachpadEt+0x20>)
+   c:	18c3      	adds	r3, r0, r3
+   e:	781b      	ldrb	r3, [r3, #0]
+  10:	4460      	add	r0, ip
+  12:	7800      	ldrb	r0, [r0, #0]
+  14:	021b      	lsls	r3, r3, #8
+  16:	4318      	orrs	r0, r3
+  18:	4770      	bx	lr
+  1a:	46c0      	nop			; (mov r8, r8)
+  1c:	00004151 	.word	0x00004151
+  20:	00004150 	.word	0x00004150
+
+*** Below with 16-bit scratchpad as part of the class.
+00000000 <_ZN5cpu_t14read_scrachpadEt>:
+   0:	4b03      	ldr	r3, [pc, #12]	; (10 <_ZN5cpu_t14read_scrachpadEt+0x10>)
+   2:	0609      	lsls	r1, r1, #24
+   4:	469c      	mov	ip, r3
+   6:	0e49      	lsrs	r1, r1, #25
+   8:	4461      	add	r1, ip
+   a:	0049      	lsls	r1, r1, #1
+   c:	5a40      	ldrh	r0, [r0, r1]
+   e:	4770      	bx	lr
+  10:	000020a8 	.word	0x000020a8
+
+
+*** Below with 16-bit scratchpad outside of the class definition.
+Disassembly of section .text._ZN5cpu_t14read_scrachpadEt:
+
+00000000 <_ZN5cpu_t14read_scrachpadEt>:
+   0:	23fe      	movs	r3, #254	; 0xfe
+   2:	4019      	ands	r1, r3
+   4:	4b01      	ldr	r3, [pc, #4]	; (c <_ZN5cpu_t14read_scrachpadEt+0xc>)
+   6:	5a58      	ldrh	r0, [r3, r1]
+   8:	4770      	bx	lr
+   a:	46c0      	nop			; (mov r8, r8)
+   c:	00000000 	.word	0x00000000
+
+
+Disassembly of section .text._ZN5cpu_t5writeEtt:
+
+00000000 <_ZN5cpu_t5writeEtt>:
+   0:	b5f0      	push	{r4, r5, r6, r7, lr}
+   2:	23fa      	movs	r3, #250	; 0xfa
+   4:	0016      	movs	r6, r2
+   6:	000d      	movs	r5, r1
+   8:	2201      	movs	r2, #1
+   a:	01db      	lsls	r3, r3, #7
+   c:	4395      	bics	r5, r2
+   e:	18eb      	adds	r3, r5, r3
+  10:	b29b      	uxth	r3, r3
+  12:	b087      	sub	sp, #28
+  14:	0004      	movs	r4, r0
+  16:	2bff      	cmp	r3, #255	; 0xff
+  18:	d82c      	bhi.n	74 <_ZN5cpu_t5writeEtt+0x74>
+  1a:	4a5d      	ldr	r2, [pc, #372]	; (190 <_ZN5cpu_t5writeEtt+0x190>)
+  1c:	1943      	adds	r3, r0, r5
+  1e:	189a      	adds	r2, r3, r2
+  20:	1231      	asrs	r1, r6, #8
+  22:	7011      	strb	r1, [r2, #0]
+  24:	4a5b      	ldr	r2, [pc, #364]	; (194 <_ZN5cpu_t5writeEtt+0x194>)
+  26:	4694      	mov	ip, r2
+  28:	4463      	add	r3, ip
+  2a:	701e      	strb	r6, [r3, #0]
+  2c:	4b5a      	ldr	r3, [pc, #360]	; (198 <_ZN5cpu_t5writeEtt+0x198>)
+  2e:	58e0      	ldr	r0, [r4, r3]
+  30:	2800      	cmp	r0, #0
+  32:	d018      	beq.n	66 <_ZN5cpu_t5writeEtt+0x66>
+  34:	4b59      	ldr	r3, [pc, #356]	; (19c <_ZN5cpu_t5writeEtt+0x19c>)
+  36:	495a      	ldr	r1, [pc, #360]	; (1a0 <_ZN5cpu_t5writeEtt+0x1a0>)
+  38:	5ae3      	ldrh	r3, [r4, r3]
+  3a:	22ee      	movs	r2, #238	; 0xee
+  3c:	428b      	cmp	r3, r1
+  3e:	d914      	bls.n	6a <_ZN5cpu_t5writeEtt+0x6a>
+  40:	4958      	ldr	r1, [pc, #352]	; (1a4 <_ZN5cpu_t5writeEtt+0x1a4>)
+  42:	9201      	str	r2, [sp, #4]
+  44:	5861      	ldr	r1, [r4, r1]
+  46:	9300      	str	r3, [sp, #0]
+  48:	9105      	str	r1, [sp, #20]
+  4a:	4957      	ldr	r1, [pc, #348]	; (1a8 <_ZN5cpu_t5writeEtt+0x1a8>)
+  4c:	0033      	movs	r3, r6
+  4e:	5a61      	ldrh	r1, [r4, r1]
+  50:	002a      	movs	r2, r5
+  52:	9104      	str	r1, [sp, #16]
+  54:	4955      	ldr	r1, [pc, #340]	; (1ac <_ZN5cpu_t5writeEtt+0x1ac>)
+  56:	5861      	ldr	r1, [r4, r1]
+  58:	9103      	str	r1, [sp, #12]
+  5a:	4955      	ldr	r1, [pc, #340]	; (1b0 <_ZN5cpu_t5writeEtt+0x1b0>)
+  5c:	5861      	ldr	r1, [r4, r1]
+  5e:	9102      	str	r1, [sp, #8]
+  60:	4954      	ldr	r1, [pc, #336]	; (1b4 <_ZN5cpu_t5writeEtt+0x1b4>)
+  62:	f7ff fffe 	bl	0 <fprintf>
+  66:	b007      	add	sp, #28
+  68:	bdf0      	pop	{r4, r5, r6, r7, pc}
+  6a:	4a53      	ldr	r2, [pc, #332]	; (1b8 <_ZN5cpu_t5writeEtt+0x1b8>)
+  6c:	18d2      	adds	r2, r2, r3
+  6e:	3a01      	subs	r2, #1
+  70:	7812      	ldrb	r2, [r2, #0]
+  72:	e7e5      	b.n	40 <_ZN5cpu_t5writeEtt+0x40>
+  74:	23e8      	movs	r3, #232	; 0xe8
+  76:	01db      	lsls	r3, r3, #7
+  78:	18eb      	adds	r3, r5, r3
+  7a:	4850      	ldr	r0, [pc, #320]	; (1bc <_ZN5cpu_t5writeEtt+0x1bc>)
+  7c:	b29b      	uxth	r3, r3
+  7e:	4283      	cmp	r3, r0
+  80:	d91b      	bls.n	ba <_ZN5cpu_t5writeEtt+0xba>
+  82:	4b4f      	ldr	r3, [pc, #316]	; (1c0 <_ZN5cpu_t5writeEtt+0x1c0>)
+  84:	429d      	cmp	r5, r3
+  86:	d934      	bls.n	f2 <_ZN5cpu_t5writeEtt+0xf2>
+  88:	23f8      	movs	r3, #248	; 0xf8
+  8a:	01db      	lsls	r3, r3, #7
+  8c:	18eb      	adds	r3, r5, r3
+  8e:	b29b      	uxth	r3, r3
+  90:	4283      	cmp	r3, r0
+  92:	d90b      	bls.n	ac <_ZN5cpu_t5writeEtt+0xac>
+  94:	23c8      	movs	r3, #200	; 0xc8
+  96:	01db      	lsls	r3, r3, #7
+  98:	18eb      	adds	r3, r5, r3
+  9a:	b29b      	uxth	r3, r3
+  9c:	4283      	cmp	r3, r0
+  9e:	d94a      	bls.n	136 <_ZN5cpu_t5writeEtt+0x136>
+  a0:	23d8      	movs	r3, #216	; 0xd8
+  a2:	01db      	lsls	r3, r3, #7
+  a4:	18eb      	adds	r3, r5, r3
+  a6:	b29b      	uxth	r3, r3
+  a8:	4283      	cmp	r3, r0
+  aa:	d83e      	bhi.n	12a <_ZN5cpu_t5writeEtt+0x12a>
+  ac:	6863      	ldr	r3, [r4, #4]
+  ae:	3304      	adds	r3, #4
+  b0:	6063      	str	r3, [r4, #4]
+  b2:	68e3      	ldr	r3, [r4, #12]
+  b4:	3304      	adds	r3, #4
+  b6:	60e3      	str	r3, [r4, #12]
+  b8:	e7b8      	b.n	2c <_ZN5cpu_t5writeEtt+0x2c>
+  ba:	23b4      	movs	r3, #180	; 0xb4
+  bc:	469c      	mov	ip, r3
+  be:	4b3b      	ldr	r3, [pc, #236]	; (1ac <_ZN5cpu_t5writeEtt+0x1ac>)
+  c0:	0a37      	lsrs	r7, r6, #8
+  c2:	18e0      	adds	r0, r4, r3
+  c4:	6803      	ldr	r3, [r0, #0]
+  c6:	44a4      	add	ip, r4
+  c8:	3301      	adds	r3, #1
+  ca:	6003      	str	r3, [r0, #0]
+  cc:	2302      	movs	r3, #2
+  ce:	4019      	ands	r1, r3
+  d0:	4b3c      	ldr	r3, [pc, #240]	; (1c4 <_ZN5cpu_t5writeEtt+0x1c4>)
+  d2:	18e3      	adds	r3, r4, r3
+  d4:	2900      	cmp	r1, #0
+  d6:	d012      	beq.n	fe <_ZN5cpu_t5writeEtt+0xfe>
+  d8:	7819      	ldrb	r1, [r3, #0]
+  da:	2900      	cmp	r1, #0
+  dc:	d020      	beq.n	120 <_ZN5cpu_t5writeEtt+0x120>
+  de:	13b2      	asrs	r2, r6, #14
+  e0:	2a01      	cmp	r2, #1
+  e2:	d050      	beq.n	186 <_ZN5cpu_t5writeEtt+0x186>
+  e4:	2a02      	cmp	r2, #2
+  e6:	d041      	beq.n	16c <_ZN5cpu_t5writeEtt+0x16c>
+  e8:	2a00      	cmp	r2, #0
+  ea:	d034      	beq.n	156 <_ZN5cpu_t5writeEtt+0x156>
+  ec:	2200      	movs	r2, #0
+  ee:	701a      	strb	r2, [r3, #0]
+  f0:	e7dc      	b.n	ac <_ZN5cpu_t5writeEtt+0xac>
+  f2:	0032      	movs	r2, r6
+  f4:	0029      	movs	r1, r5
+  f6:	4834      	ldr	r0, [pc, #208]	; (1c8 <_ZN5cpu_t5writeEtt+0x1c8>)
+  f8:	f7ff fffe 	bl	0 <printf>
+  fc:	e796      	b.n	2c <_ZN5cpu_t5writeEtt+0x2c>
+  fe:	7019      	strb	r1, [r3, #0]
+ 100:	4b29      	ldr	r3, [pc, #164]	; (1a8 <_ZN5cpu_t5writeEtt+0x1a8>)
+ 102:	18e1      	adds	r1, r4, r3
+ 104:	880b      	ldrh	r3, [r1, #0]
+ 106:	18e2      	adds	r2, r4, r3
+ 108:	3301      	adds	r3, #1
+ 10a:	049b      	lsls	r3, r3, #18
+ 10c:	32bc      	adds	r2, #188	; 0xbc
+ 10e:	0c9b      	lsrs	r3, r3, #18
+ 110:	7017      	strb	r7, [r2, #0]
+ 112:	800b      	strh	r3, [r1, #0]
+ 114:	4b26      	ldr	r3, [pc, #152]	; (1b0 <_ZN5cpu_t5writeEtt+0x1b0>)
+ 116:	18e2      	adds	r2, r4, r3
+ 118:	6813      	ldr	r3, [r2, #0]
+ 11a:	3301      	adds	r3, #1
+ 11c:	6013      	str	r3, [r2, #0]
+ 11e:	e7c5      	b.n	ac <_ZN5cpu_t5writeEtt+0xac>
+ 120:	492a      	ldr	r1, [pc, #168]	; (1cc <_ZN5cpu_t5writeEtt+0x1cc>)
+ 122:	1861      	adds	r1, r4, r1
+ 124:	700f      	strb	r7, [r1, #0]
+ 126:	701a      	strb	r2, [r3, #0]
+ 128:	e7c0      	b.n	ac <_ZN5cpu_t5writeEtt+0xac>
+ 12a:	76a2      	strb	r2, [r4, #26]
+ 12c:	0029      	movs	r1, r5
+ 12e:	4828      	ldr	r0, [pc, #160]	; (1d0 <_ZN5cpu_t5writeEtt+0x1d0>)
+ 130:	f7ff fffe 	bl	0 <printf>
+ 134:	e77a      	b.n	2c <_ZN5cpu_t5writeEtt+0x2c>
+ 136:	4b27      	ldr	r3, [pc, #156]	; (1d4 <_ZN5cpu_t5writeEtt+0x1d4>)
+ 138:	0a32      	lsrs	r2, r6, #8
+ 13a:	0029      	movs	r1, r5
+ 13c:	18e0      	adds	r0, r4, r3
+ 13e:	f7ff fffe 	bl	0 <_ZN5cpu_t5writeEtt>
+ 142:	2100      	movs	r1, #0
+ 144:	4b24      	ldr	r3, [pc, #144]	; (1d8 <_ZN5cpu_t5writeEtt+0x1d8>)
+ 146:	5ce2      	ldrb	r2, [r4, r3]
+ 148:	54e1      	strb	r1, [r4, r3]
+ 14a:	2a00      	cmp	r2, #0
+ 14c:	d0ae      	beq.n	ac <_ZN5cpu_t5writeEtt+0xac>
+ 14e:	0020      	movs	r0, r4
+ 150:	f7ff fffe 	bl	0 <_ZN5cpu_t5writeEtt>
+ 154:	e7aa      	b.n	ac <_ZN5cpu_t5writeEtt+0xac>
+ 156:	0031      	movs	r1, r6
+ 158:	32ff      	adds	r2, #255	; 0xff
+ 15a:	4391      	bics	r1, r2
+ 15c:	4a1b      	ldr	r2, [pc, #108]	; (1cc <_ZN5cpu_t5writeEtt+0x1cc>)
+ 15e:	18a2      	adds	r2, r4, r2
+ 160:	7812      	ldrb	r2, [r2, #0]
+ 162:	430a      	orrs	r2, r1
+ 164:	4910      	ldr	r1, [pc, #64]	; (1a8 <_ZN5cpu_t5writeEtt+0x1a8>)
+ 166:	1861      	adds	r1, r4, r1
+ 168:	800a      	strh	r2, [r1, #0]
+ 16a:	e7bf      	b.n	ec <_ZN5cpu_t5writeEtt+0xec>
+ 16c:	2207      	movs	r2, #7
+ 16e:	4661      	mov	r1, ip
+ 170:	4017      	ands	r7, r2
+ 172:	4a16      	ldr	r2, [pc, #88]	; (1cc <_ZN5cpu_t5writeEtt+0x1cc>)
+ 174:	18a2      	adds	r2, r4, r2
+ 176:	7812      	ldrb	r2, [r2, #0]
+ 178:	55ca      	strb	r2, [r1, r7]
+ 17a:	4a0a      	ldr	r2, [pc, #40]	; (1a4 <_ZN5cpu_t5writeEtt+0x1a4>)
+ 17c:	18a1      	adds	r1, r4, r2
+ 17e:	680a      	ldr	r2, [r1, #0]
+ 180:	3201      	adds	r2, #1
+ 182:	600a      	str	r2, [r1, #0]
+ 184:	e7b2      	b.n	ec <_ZN5cpu_t5writeEtt+0xec>
+ 186:	21fc      	movs	r1, #252	; 0xfc
+ 188:	0189      	lsls	r1, r1, #6
+ 18a:	4031      	ands	r1, r6
+ 18c:	e7e6      	b.n	15c <_ZN5cpu_t5writeEtt+0x15c>
+ 18e:	46c0      	nop			; (mov r8, r8)
+ 190:	ffffbe50 	.word	0xffffbe50
+ 194:	ffffbe51 	.word	0xffffbe51
+ 198:	00004264 	.word	0x00004264
+ 19c:	00004142 	.word	0x00004142
+ 1a0:	00005fff 	.word	0x00005fff
+ 1a4:	000040d0 	.word	0x000040d0
+ 1a8:	000040c2 	.word	0x000040c2
+ 1ac:	000040c8 	.word	0x000040c8
+ 1b0:	000040cc 	.word	0x000040cc
+ 1b4:	00000040 	.word	0x00000040
+ 1b8:	00000000 	.word	0x00000000
+ 1bc:	000003ff 	.word	0x000003ff
+ 1c0:	00001fff 	.word	0x00001fff
+ 1c4:	000040c4 	.word	0x000040c4
+ 1c8:	00000000 	.word	0x00000000
+ 1cc:	000040c0 	.word	0x000040c0
+ 1d0:	0000001c 	.word	0x0000001c
+ 1d4:	00004138 	.word	0x00004138
+ 1d8:	0000414c 	.word	0x0000414c
+
+
+M0 new implementation 16-bit wide scratchpad
+

@@ -16,3 +16,11 @@ build2
 verify
 build-2022*/
 build-old-non-working
+instruction timing.numbers
+sys-pico-16bit-scratchpad-outside-of-class.txt
+sys-pico-16bit-scratchpad.txt
+sys-pico.txt
+sys-stm32-base-class-jumps.txt
+sys-stm32-sp-outside-class.txt
+sys-stm32.txt
+tms9900-stm32.txt
