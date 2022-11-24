@@ -14,3 +14,5 @@ parsecrom.c
 parsecgrom.c
 build2
 verify
+build-2022*/
+build-old-non-working

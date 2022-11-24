@@ -23,6 +23,7 @@ extern "C" {
     extern const unsigned char grom994a_data[];
     extern const unsigned char rominvaders_data[];
     extern const unsigned char grominvaders_data[];
+    extern const unsigned char multicolor_data[];
 }
 
 uint32_t cpu_t::vdp_interrupts;
@@ -35,6 +36,9 @@ unsigned cpu_t::dsr_mem_counter;       //!< count DSR region accesses
 unsigned cpu_t::cart_counter;
 cpu_t   *cpu_t::sys;
 FILE    *cpu_t::debug_log;
+uint16_t cpu_t::low_ram[8*1024/2];
+uint16_t cpu_t::high_ram[24*1024/2];
+unsigned long cpu_t::debug_timers[4]; 
 
 
 
@@ -60,8 +64,8 @@ uint8_t tigrom_t::read_mem(uint16_t addr) {
     addr_complete = 0;
     if(addr < 0x6000)
         return grom994a_data[addr];
-    if(addr < 0x8000)
-        return grominvaders_data[addr - 0x6000];
+    // if(addr < 0x8000)
+    //    return grominvaders_data[addr - 0x6000];
     // printf("Reading outside valid GROM area 0x%04X.\r\n", addr);
     return 0;
 }
@@ -87,8 +91,14 @@ cpu_t::cpu_t() {
     for(int i=0; i<8; i++) {
         // Init several 8k regions
         read_funcs[i]    = read_rom;
+        read_funcs[8+i]  = read_low_ram;
+        write_funcs[8+i] = write_low_ram;
         read_funcs[16+i] = read_dsr;
         read_funcs[24+i] = read_cartridge;
+    }
+    for(int i=0; i<24; i++) {
+        read_funcs[40+i] = read_high_ram;
+        write_funcs[40+i] = write_high_ram;
     }
     read_funcs[ 0x8300 >> 10] = read_scratchpad;
     read_funcs[ 0x8400 >> 10] = read_soundchip;
@@ -100,8 +110,13 @@ cpu_t::cpu_t() {
     read_funcs[ 0x9C00 >> 10] = read_grom_write_port;
 
     write_funcs[0x8300 >> 10] = write_scratchpad;
+    write_funcs[0x9400 >> 10] = write_timers;       // Handle debug timers instead of writing to speech
     write_funcs[0x8c00 >> 10] = write_vdp;
     sys = this;
+
+    memset(low_ram, 0, sizeof(low_ram));
+    memset(high_ram, 0, sizeof(high_ram));
+    memset(debug_timers, 0, sizeof(debug_timers));
 }
 
 void cpu_t::reset() {
@@ -276,13 +291,27 @@ tms9900_t::read_type cpu_t::read_cartridge(uint16_t addr) {
     // 0x6000..0x7FFF
     cart_counter++;
     add_ext_cycles(4);
-    return (rominvaders_data[addr - 0x6000] << 8) 
-            |  rominvaders_data[addr - 0x6000+1];
+    return (multicolor_data[addr - 0x6000] << 8) 
+            |  multicolor_data[addr - 0x6000+1];
+    // return (rominvaders_data[addr - 0x6000] << 8) 
+    //        |  rominvaders_data[addr - 0x6000+1];
 }
 RAM_ROUTINE_SECTION tms9900_t::read_type cpu_t::read_scratchpad(uint16_t addr) {
     return scratchpad[0x7F & (addr >> 1)];
     // return (scratchpad[addr & 0xFE] << 8) | scratchpad[(addr & 0xFE) + 1];
 }
+
+RAM_ROUTINE_SECTION tms9900_t::read_type cpu_t::read_low_ram(uint16_t addr) {
+    return low_ram[ 0x0FFF & (addr >> 1)];
+}
+
+RAM_ROUTINE_SECTION tms9900_t::read_type cpu_t::read_high_ram(uint16_t addr) {
+    if(addr >= 0xA000)
+        return high_ram[((addr - 0xA000) >> 1)];
+    else
+        return 0xDEAD;
+}
+
 tms9900_t::read_type cpu_t::read_soundchip(uint16_t addr) {
     // 8400
     add_ext_cycles(4);
@@ -389,6 +418,24 @@ tms9900_t::read_type cpu_t::read_all_cases(uint16_t addr) {
 
 RAM_ROUTINE_SECTION void cpu_t::write_scratchpad(uint16_t addr, tms9900_t::read_type data) {
     scratchpad[0x7F & (addr >> 1)] = data;
+}
+
+RAM_ROUTINE_SECTION void cpu_t::write_low_ram(uint16_t addr, tms9900_t::read_type data) {
+    low_ram[0xFFF & (addr >> 1)] = data;
+}
+
+RAM_ROUTINE_SECTION void cpu_t::write_high_ram(uint16_t addr, tms9900_t::read_type data) {
+    high_ram[(addr - 0xA000) >> 1] = data;
+}
+
+void cpu_t::write_timers(uint16_t addr, tms9900_t::read_type data) {
+    int index = 3 & (addr >> 1);
+    if(!data)
+        debug_timers[index] = sys->get_cycles();
+    else {
+        // Display value of the timer.
+        printf("Timer %d value %lu\n", index, sys->get_cycles() - debug_timers[index]);
+    }
 }
 
 void cpu_t::write_vdp(uint16_t addr, tms9900_t::read_type data) {

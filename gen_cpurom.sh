@@ -7,3 +7,6 @@
 ~/Dropbox/Omat/mcu32/strangecart/rom2c -a rominvaders assets/TI-InvaC.BIN invadersrom.c
 ~/Dropbox/Omat/mcu32/strangecart/rom2c -a grominvaders assets/TI-InvaG.BIN invadersgrom.c
 
+# Multicolor demo program.
+~/Dropbox/Omat/mcu32/strangecart/rom2c -a multicolor assets/multicolor.bin multicolorrom.c
+

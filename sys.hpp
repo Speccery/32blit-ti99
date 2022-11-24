@@ -45,6 +45,9 @@ public:
     static uint16_t scratchpad[128];    
     static unsigned dsr_mem_counter;       //!< count DSR region accesses
     static unsigned cart_counter;
+    static uint16_t low_ram[8192/2];        //!< 0x2000..0x3FFF
+    static uint16_t high_ram[24*1024/2];    //!< 0xA000..0xFFFF
+    static unsigned long debug_timers[4];   //!< Timers reset by writing zero, a non-zero will display the timer value on debug console.
 
 public:    
 
@@ -142,6 +145,8 @@ protected:
   static tms9900_t::read_type read_dsr(uint16_t addr);
   static tms9900_t::read_type read_cartridge(uint16_t addr);
   static tms9900_t::read_type read_scratchpad(uint16_t addr);
+  static tms9900_t::read_type read_low_ram(uint16_t addr);
+  static tms9900_t::read_type read_high_ram(uint16_t addr);
   static tms9900_t::read_type read_soundchip(uint16_t addr);
   static tms9900_t::read_type read_vdp(uint16_t addr);
   static tms9900_t::read_type read_vdp_write_port(uint16_t addr);
@@ -152,10 +157,12 @@ protected:
   virtual tms9900_t::read_type read_all_cases(uint16_t addr);
 
   static void write_scratchpad(uint16_t addr, tms9900_t::read_type data);
+  static void write_low_ram(uint16_t addr, tms9900_t::read_type data);
+  static void write_high_ram(uint16_t addr, tms9900_t::read_type data);
   static void write_vdp(uint16_t addr, tms9900_t::read_type data);
   static void static_write_all_cases(uint16_t addr, tms9900_t::read_type data);
   void write_all_cases(uint16_t addr, tms9900_t::read_type data);
-
+  static void write_timers(uint16_t addr, tms9900_t::read_type data);
 
   virtual void write_cru_bit(uint16_t addr, uint8_t data);
   virtual uint8_t read_cru_bit(uint16_t addr);

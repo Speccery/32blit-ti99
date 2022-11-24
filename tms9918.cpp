@@ -108,6 +108,8 @@ void tms9918_t::scanline(uint8_t *fp, int y) {
             // Multicolor mode
             color1 = pattern >> 4;
             color0 = pattern & 0xF;
+            // Force pattern for multicolor mode.
+            pattern = 0xF0;
         } else {
             color1 = regs[1] & 0x10 ? regs[7] >> 4  : color >> 4;
             color0 = (color & 0xF) == 0 || (regs[1] & 0x10) ? regs[7] & 0xF : color & 0xF;
