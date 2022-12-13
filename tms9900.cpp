@@ -8,8 +8,7 @@
 
 #define INTLEN 32
 
-
-const instrucion_t instructions[] = {
+const instruction_t instructions[] = {
     // Dual operand instructions.
     // Dual operand with multiple addressing modes for source and destination
     { 0xA000, 0xF000, dual_op_mult_mult, "A" },
